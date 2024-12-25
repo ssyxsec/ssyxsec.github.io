@@ -1,0 +1,236 @@
+<html>
+  <head>
+    <meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PWN从入门到放弃(4)——程序保护机制 | 山深有杏&#39;s Blog</title>
+<link rel="shortcut icon" href="https://ssyxsec.com/favicon.ico?v=1735101861265">
+<link href="https://cdn.jsdelivr.net/npm/remixicon@2.3.0/fonts/remixicon.css" rel="stylesheet">
+<link rel="stylesheet" href="https://ssyxsec.com/styles/main.css">
+<link rel="alternate" type="application/atom+xml" title="PWN从入门到放弃(4)——程序保护机制 | 山深有杏&#39;s Blog - Atom Feed" href="https://ssyxsec.com/atom.xml">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Droid+Serif:400,700">
+
+
+
+    <meta name="description" content="0x00 程序保护机制
+查看程序保护机制
+$ checksec ./pwn #pwn为elf程序文件
+
+
+0x01 CANNARY(栈保护)
+这个选项表示栈保护功能有没有开启。
+栈溢出保护是一种缓冲区溢出攻击缓解手段，当函数存在缓冲区溢出攻..." />
+    <meta name="keywords" content="CTF,Pwn" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.10.0/katex.min.css">
+    <script src="//cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.5.1/build/highlight.min.js"></script>
+  </head>
+  <body>
+    <div class="main">
+      <div class="main-content">
+        <div class="site-header">
+  <a href="https://ssyxsec.com">
+  <img class="avatar" src="https://ssyxsec.com/images/avatar.png?v=1735101861265" alt="">
+  </a>
+  <h1 class="site-title">
+    山深有杏&#39;s Blog
+  </h1>
+  <p class="site-description">
+    These Violent Delights Have Violent Ends.
+  </p>
+  <div class="menu-container">
+    
+      
+        <a href="/" class="menu">
+          首页
+        </a>
+      
+    
+      
+        <a href="/archives" class="menu">
+          归档
+        </a>
+      
+    
+      
+        <a href="/tags" class="menu">
+          标签
+        </a>
+      
+    
+      
+        <a href="https://ssyxsec.com/0mQfqrf6-n" class="menu">
+          关于
+        </a>
+      
+    
+  </div>
+  <div class="social-container">
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+  </div>
+</div>
+
+        <div class="post-detail">
+          <article class="post">
+            <h2 class="post-title">
+              PWN从入门到放弃(4)——程序保护机制
+            </h2>
+            <div class="post-info">
+              <span>
+                2024-11-06
+              </span>
+              <span>
+                4 min read
+              </span>
+              
+                <a href="https://ssyxsec.com/tag/mFiLVoNunh/" class="post-tag">
+                  # CTF
+                </a>
+              
+                <a href="https://ssyxsec.com/tag/BcBYBpcwgI/" class="post-tag">
+                  # Pwn
+                </a>
+              
+            </div>
+            
+            <div class="post-content-wrapper">
+              <div class="post-content" v-pre>
+                <h3 id="0x00-程序保护机制">0x00 程序保护机制</h3>
+<h4 id="查看程序保护机制">查看程序保护机制</h4>
+<pre><code class="language-javascript">$ checksec ./pwn #pwn为elf程序文件
+</code></pre>
+<figure data-type="image" tabindex="1"><img src="https://ssyxsec.com/post-images/1730887111062.png" alt="" loading="lazy"></figure>
+<h3 id="0x01-cannary栈保护">0x01 <strong>CANNARY(栈保护)</strong></h3>
+<p>这个选项表示栈保护功能有没有开启。</p>
+<p>栈溢出保护是一种缓冲区溢出攻击缓解手段，当函数存在缓冲区溢出攻击漏洞时，攻击者可以覆盖栈上的返回地址来让shellcode能够得到执行。当启用栈保护后，函数开始执行的时候会先往栈里插入cookie信息，当函数真正返回的时候会验证cookie信息是否合法，如果不合法就停止程序运行。攻击者在覆盖返回地址的时候往往也会将cookie信息给覆盖掉，导致栈保护检查失败而阻止shellcode的执行。在Linux中我们将cookie信息称为canary。</p>
+<p>gcc在4.2版本中添加了-fstack-protector和-fstack-protector-all编译参数以支持栈保护功能，4.9新增了-fstack-protector-strong编译参数让保护的范围更广。</p>
+<p>因此在编译时可以控制是否开启栈保护以及程度，例如：</p>
+<pre><code class="language-javascript">$ gcc -fno-stack-protector -o test test.c  #禁用栈保护
+$ gcc -fstack-protector -o test test.c  #启用堆栈保护，不过只为局部变量中含有char数组的函数插入保护代码
+$ gcc -fstack-protector-all -o test test.c #启用堆栈保护，为所有函数插入保护代码
+</code></pre>
+<h3 id="0x02-nxdep">0x02 <strong>NX（DEP）</strong></h3>
+<p>NX即No-eXecute（不可执行）的意思，NX（DEP）的基本原理是将数据所在内存页标识为不可执行，当程序溢出成功转入shellcode时，程序会尝试在数据页面上执行指令，此时CPU就会抛出异常，而不是去执行恶意指令。</p>
+<p>工作原理如图：</p>
+<figure data-type="image" tabindex="2"><img src="https://ssyxsec.com/post-images/1730887119960.png" alt="" loading="lazy"></figure>
+<p>gcc编译器默认开启了NX选项，如果需要关闭NX选项，可以给gcc编译器添加-z execstack参数。</p>
+<p>例如：</p>
+<pre><code class="language-javascript">$ gcc -z execstack -o test test.c
+</code></pre>
+<p>在Windows下，类似的概念为DEP（数据执行保护），在最新版的Visual Studio中默认开启了DEP编译选项。</p>
+<h3 id="0x03-pieaslr">0x03 <strong>PIE（ASLR）</strong></h3>
+<p>一般情况下NX（Windows平台上称其为DEP）和地址空间分布随机化（ASLR）会同时工作。</p>
+<p>内存地址随机化机制（address space layout randomization)，有以下三种情况：</p>
+<ul>
+<li>0 – 表示关闭进程地址空间随机化</li>
+<li>1 – 表示将mmap的基址，stack和vdso页面随机化</li>
+<li>2 – 表示在1的基础上增加堆（heap）的随机化</li>
+</ul>
+<p>可以防范基于Ret2libc方式的针对DEP的攻击。ASLR和DEP配合使用，能有效阻止攻击者在堆栈上运行恶意代码。</p>
+<p>Built as PIE：位置独立的可执行区域(position-independent executables)。这样使得在利用缓冲溢出和移动操作系统中存在的其他内存崩溃缺陷时采用面向返回的编程（return-oriented programming）方法变得难得多。</p>
+<p>liunx下关闭PIE的命令如下：</p>
+<pre><code class="language-javascript">$ sudo -s echo 0 &gt; /proc/sys/kernel/randomize_va_space
+</code></pre>
+<h3 id="0x04-relro">0x04 <strong>RELRO</strong></h3>
+<p>设置符号重定向表为只读或在程序启动时就解析并绑定所有动态符号，从而减少对GOT（Global Offset Table）攻击。RELRO为” Partial RELRO”，说明我们对GOT表具有写权限。</p>
+
+              </div>
+              <div class="toc-container">
+                <ul class="markdownIt-TOC">
+<li>
+<ul>
+<li>
+<ul>
+<li><a href="#0x00-%E7%A8%8B%E5%BA%8F%E4%BF%9D%E6%8A%A4%E6%9C%BA%E5%88%B6">0x00 程序保护机制</a>
+<ul>
+<li><a href="#%E6%9F%A5%E7%9C%8B%E7%A8%8B%E5%BA%8F%E4%BF%9D%E6%8A%A4%E6%9C%BA%E5%88%B6">查看程序保护机制</a></li>
+</ul>
+</li>
+<li><a href="#0x01-cannary%E6%A0%88%E4%BF%9D%E6%8A%A4">0x01 <strong>CANNARY(栈保护)</strong></a></li>
+<li><a href="#0x02-nxdep">0x02 <strong>NX（DEP）</strong></a></li>
+<li><a href="#0x03-pieaslr">0x03 <strong>PIE（ASLR）</strong></a></li>
+<li><a href="#0x04-relro">0x04 <strong>RELRO</strong></a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+              </div>
+            </div>
+          </article>
+        </div>
+
+        
+          <div class="next-post">
+            <div class="next">下一篇</div>
+            <a href="https://ssyxsec.com/_oATtcANf7/">
+              <h3 class="post-title">
+                PWN从入门到放弃(3)——栈&amp;栈帧
+              </h3>
+            </a>
+          </div>
+        
+
+        
+
+        <div class="site-footer">
+  Powered by <a href="https://github.com/getgridea/gridea" target="_blank">Gridea</a>
+  <a class="rss" href="https://ssyxsec.com/atom.xml" target="_blank">
+    <i class="ri-rss-line"></i> RSS
+  </a>
+</div>
+
+      </div>
+    </div>
+
+    <script>
+      hljs.initHighlightingOnLoad()
+
+      let mainNavLinks = document.querySelectorAll(".markdownIt-TOC a");
+
+      // This should probably be throttled.
+      // Especially because it triggers during smooth scrolling.
+      // https://lodash.com/docs/4.17.10#throttle
+      // You could do like...
+      // window.addEventListener("scroll", () => {
+      //    _.throttle(doThatStuff, 100);
+      // });
+      // Only not doing it here to keep this Pen dependency-free.
+
+      window.addEventListener("scroll", event => {
+        let fromTop = window.scrollY;
+
+        mainNavLinks.forEach((link, index) => {
+          let section = document.getElementById(decodeURI(link.hash).substring(1));
+          let nextSection = null
+          if (mainNavLinks[index + 1]) {
+            nextSection = document.getElementById(decodeURI(mainNavLinks[index + 1].hash).substring(1));
+          }
+          if (section.offsetTop <= fromTop) {
+            if (nextSection) {
+              if (nextSection.offsetTop > fromTop) {
+                link.classList.add("current");
+              } else {
+                link.classList.remove("current");    
+              }
+            } else {
+              link.classList.add("current");
+            }
+          } else {
+            link.classList.remove("current");
+          }
+        });
+      });
+
+    </script>
+  </body>
+</html>

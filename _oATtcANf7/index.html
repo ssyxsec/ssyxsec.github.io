@@ -1,0 +1,221 @@
+<html>
+  <head>
+    <meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PWN从入门到放弃(3)——栈&amp;栈帧 | 山深有杏&#39;s Blog</title>
+<link rel="shortcut icon" href="https://ssyxsec.com/favicon.ico?v=1735101861265">
+<link href="https://cdn.jsdelivr.net/npm/remixicon@2.3.0/fonts/remixicon.css" rel="stylesheet">
+<link rel="stylesheet" href="https://ssyxsec.com/styles/main.css">
+<link rel="alternate" type="application/atom+xml" title="PWN从入门到放弃(3)——栈&amp;栈帧 | 山深有杏&#39;s Blog - Atom Feed" href="https://ssyxsec.com/atom.xml">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Droid+Serif:400,700">
+
+
+
+    <meta name="description" content="本章给大家介绍一下栈，栈的利用是pwn题中的重要考点，理解好栈的结构对后续做题有很大帮助。
+0x00 栈介绍
+栈是一种典型的后进先出 (Last in First Out) 的数据结构，其操作主要有压栈 (push) 与出栈 (pop) 两..." />
+    <meta name="keywords" content="CTF,Pwn" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.10.0/katex.min.css">
+    <script src="//cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.5.1/build/highlight.min.js"></script>
+  </head>
+  <body>
+    <div class="main">
+      <div class="main-content">
+        <div class="site-header">
+  <a href="https://ssyxsec.com">
+  <img class="avatar" src="https://ssyxsec.com/images/avatar.png?v=1735101861265" alt="">
+  </a>
+  <h1 class="site-title">
+    山深有杏&#39;s Blog
+  </h1>
+  <p class="site-description">
+    These Violent Delights Have Violent Ends.
+  </p>
+  <div class="menu-container">
+    
+      
+        <a href="/" class="menu">
+          首页
+        </a>
+      
+    
+      
+        <a href="/archives" class="menu">
+          归档
+        </a>
+      
+    
+      
+        <a href="/tags" class="menu">
+          标签
+        </a>
+      
+    
+      
+        <a href="https://ssyxsec.com/0mQfqrf6-n" class="menu">
+          关于
+        </a>
+      
+    
+  </div>
+  <div class="social-container">
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+  </div>
+</div>
+
+        <div class="post-detail">
+          <article class="post">
+            <h2 class="post-title">
+              PWN从入门到放弃(3)——栈&amp;栈帧
+            </h2>
+            <div class="post-info">
+              <span>
+                2024-11-06
+              </span>
+              <span>
+                4 min read
+              </span>
+              
+                <a href="https://ssyxsec.com/tag/mFiLVoNunh/" class="post-tag">
+                  # CTF
+                </a>
+              
+                <a href="https://ssyxsec.com/tag/BcBYBpcwgI/" class="post-tag">
+                  # Pwn
+                </a>
+              
+            </div>
+            
+            <div class="post-content-wrapper">
+              <div class="post-content" v-pre>
+                <p>本章给大家介绍一下栈，栈的利用是pwn题中的重要考点，理解好栈的结构对后续做题有很大帮助。</p>
+<h3 id="0x00-栈介绍">0x00 栈介绍</h3>
+<p>栈是一种典型的后进先出 (Last in First Out) 的数据结构，其操作主要有压栈 (push) 与出栈 (pop) 两种操作，如下图所示。两种操作都操作栈顶，当然，它也有栈底。</p>
+<figure data-type="image" tabindex="1"><img src="https://ssyxsec.com/post-images/1730886161749.png" alt="" loading="lazy"></figure>
+<h3 id="0x01-函数调用栈">0x01 函数调用栈</h3>
+<p>程序的执行过程可看作连续的函数调用。当一个函数执行完毕时，程序要回到调用指令的下一条指令 (紧接 call 指令) 处继续执行。函数调用过程通常使用堆栈实现，每个用户态进程对应一个调用栈结构 (call stack)。编译器使用堆栈传递函数参数、保存返回地址、临时保存寄存器原有值(即函数调用的上下文) 以备恢复以及存储本地局部变量。</p>
+<h4 id="寄存器">寄存器</h4>
+<p>寄存器是处理器加工数据或运行程序的重要载体，用于存放程序执行中用到的数据和指令。因此函数调用栈的实现与处理器寄存器组密切相关。</p>
+<p>我们常见的一般都是intel 32位体系架构的处理器，包含 8 个四字节寄存器。</p>
+<figure data-type="image" tabindex="2"><img src="https://ssyxsec.com/post-images/1730886167437.jpg" alt="" loading="lazy"></figure>
+<p>其中</p>
+<ul>
+<li>ESP：堆栈指针寄存器，存放执行函数对应栈帧的栈顶地址，且始终指向栈顶。</li>
+<li>EBP：栈帧基址指针寄存器，存放执行函数对应栈帧的栈底地址，用于 C 运行库访问栈中的局部变量和参数。</li>
+<li>EIP：指令寄存器，指向处理器下条等待执行的指令地址 。</li>
+<li>EAX、ECX 和 EDX：主调函数保存寄存器，当函数调用时，若主调函数希望保持这些寄存器的值，则必须在调用前显式地将其保存在栈中；被调函数可以覆盖这些寄存器，而不会破坏主调函数所需的数据。</li>
+<li>EBX、ESI 和 EDI：被调函数保存寄存器，即被调函数在覆盖这些寄存器的值时，必须先将寄存器原值压入栈中保存起来，并在函数返回前从栈中恢复其原值，因为主调函数可能也在使用这些寄存器。</li>
+</ul>
+<p>注1：EAX、EBX、ECX和EDX，各自可作为两个独立的 16 位寄存器使用，而低 16 位寄存器还可继续分为两个独立的 8 位寄存器使用。</p>
+<p>注2：不同架构的 CPU，寄存器名称被添加不同前缀以指示寄存器的大小。例如 x86 架构用字母 “e(extended)” 作名称前缀，指示寄存器大小为 32 位；x86_64 架构用字母 “r” 作名称前缀，指示各寄存器大小为 64 位。</p>
+<h3 id="0x02-栈帧">0x02 栈帧</h3>
+<p>函数调用经常是嵌套的，在同一时刻，堆栈中会有多个函数的信息。每个未完成运行的函数占用一个独立的连续区域，称作栈帧 (Stack Frame)。栈帧是堆栈的逻辑片段，当调用函数时逻辑栈帧被压入堆栈, 当函数返回时逻辑栈帧被从堆栈中弹出。栈帧存放着函数参数，局部变量及恢复前一栈帧所需要的数据等。</p>
+<p>栈帧的边界由栈帧基地址指针 EBP 和堆栈指针 ESP 界定 (指针存放在相应寄存器中)。EBP 指向当前栈帧底部 (高地址)，在当前栈帧内位置固定；ESP 指向当前栈帧顶部 (低地址)，当程序执行时 ESP 会随着数据的入栈和出栈而移动。因此函数中对大部分数据的访问都基于 EBP 进行。</p>
+<figure data-type="image" tabindex="3"><img src="https://ssyxsec.com/post-images/1730886174796.png" alt="" loading="lazy"></figure>
+<h3 id="0x03-参考链接">0x03 参考链接</h3>
+<ul>
+<li><a href="https://ctf-wiki.github.io/ctf-wiki/pwn/linux/stackoverflow/stack-intro-zh/">CTF-wiki-栈介绍</a></li>
+<li><a href="https://www.cnblogs.com/clover-toeic/p/3755401.html">C语言函数调用栈（一）</a></li>
+</ul>
+
+              </div>
+              <div class="toc-container">
+                <ul class="markdownIt-TOC">
+<li>
+<ul>
+<li>
+<ul>
+<li><a href="#0x00-%E6%A0%88%E4%BB%8B%E7%BB%8D">0x00 栈介绍</a></li>
+<li><a href="#0x01-%E5%87%BD%E6%95%B0%E8%B0%83%E7%94%A8%E6%A0%88">0x01 函数调用栈</a>
+<ul>
+<li><a href="#%E5%AF%84%E5%AD%98%E5%99%A8">寄存器</a></li>
+</ul>
+</li>
+<li><a href="#0x02-%E6%A0%88%E5%B8%A7">0x02 栈帧</a></li>
+<li><a href="#0x03-%E5%8F%82%E8%80%83%E9%93%BE%E6%8E%A5">0x03 参考链接</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+              </div>
+            </div>
+          </article>
+        </div>
+
+        
+          <div class="next-post">
+            <div class="next">下一篇</div>
+            <a href="https://ssyxsec.com/ij5eG_Op4u/">
+              <h3 class="post-title">
+                PWN从入门到放弃(2)——Pwntools使用入门
+              </h3>
+            </a>
+          </div>
+        
+
+        
+
+        <div class="site-footer">
+  Powered by <a href="https://github.com/getgridea/gridea" target="_blank">Gridea</a>
+  <a class="rss" href="https://ssyxsec.com/atom.xml" target="_blank">
+    <i class="ri-rss-line"></i> RSS
+  </a>
+</div>
+
+      </div>
+    </div>
+
+    <script>
+      hljs.initHighlightingOnLoad()
+
+      let mainNavLinks = document.querySelectorAll(".markdownIt-TOC a");
+
+      // This should probably be throttled.
+      // Especially because it triggers during smooth scrolling.
+      // https://lodash.com/docs/4.17.10#throttle
+      // You could do like...
+      // window.addEventListener("scroll", () => {
+      //    _.throttle(doThatStuff, 100);
+      // });
+      // Only not doing it here to keep this Pen dependency-free.
+
+      window.addEventListener("scroll", event => {
+        let fromTop = window.scrollY;
+
+        mainNavLinks.forEach((link, index) => {
+          let section = document.getElementById(decodeURI(link.hash).substring(1));
+          let nextSection = null
+          if (mainNavLinks[index + 1]) {
+            nextSection = document.getElementById(decodeURI(mainNavLinks[index + 1].hash).substring(1));
+          }
+          if (section.offsetTop <= fromTop) {
+            if (nextSection) {
+              if (nextSection.offsetTop > fromTop) {
+                link.classList.add("current");
+              } else {
+                link.classList.remove("current");    
+              }
+            } else {
+              link.classList.add("current");
+            }
+          } else {
+            link.classList.remove("current");
+          }
+        });
+      });
+
+    </script>
+  </body>
+</html>

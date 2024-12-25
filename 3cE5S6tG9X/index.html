@@ -1,0 +1,210 @@
+<html>
+  <head>
+    <meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PWN从入门到放弃(1)——PWN环境搭建 | 山深有杏&#39;s Blog</title>
+<link rel="shortcut icon" href="https://ssyxsec.com/favicon.ico?v=1735101861265">
+<link href="https://cdn.jsdelivr.net/npm/remixicon@2.3.0/fonts/remixicon.css" rel="stylesheet">
+<link rel="stylesheet" href="https://ssyxsec.com/styles/main.css">
+<link rel="alternate" type="application/atom+xml" title="PWN从入门到放弃(1)——PWN环境搭建 | 山深有杏&#39;s Blog - Atom Feed" href="https://ssyxsec.com/atom.xml">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Droid+Serif:400,700">
+
+
+
+    <meta name="description" content="0x00 安装环境
+​
+本文主要介绍利用ubuntu搭建pwn做题环境，包括pwntools,gdb,gdb-pwndbg,gdb-peda,libc库等
+0x01 安装pwntools
+$ sudo apt-get update
+$ su..." />
+    <meta name="keywords" content="Pwn" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.10.0/katex.min.css">
+    <script src="//cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.5.1/build/highlight.min.js"></script>
+  </head>
+  <body>
+    <div class="main">
+      <div class="main-content">
+        <div class="site-header">
+  <a href="https://ssyxsec.com">
+  <img class="avatar" src="https://ssyxsec.com/images/avatar.png?v=1735101861265" alt="">
+  </a>
+  <h1 class="site-title">
+    山深有杏&#39;s Blog
+  </h1>
+  <p class="site-description">
+    These Violent Delights Have Violent Ends.
+  </p>
+  <div class="menu-container">
+    
+      
+        <a href="/" class="menu">
+          首页
+        </a>
+      
+    
+      
+        <a href="/archives" class="menu">
+          归档
+        </a>
+      
+    
+      
+        <a href="/tags" class="menu">
+          标签
+        </a>
+      
+    
+      
+        <a href="https://ssyxsec.com/0mQfqrf6-n" class="menu">
+          关于
+        </a>
+      
+    
+  </div>
+  <div class="social-container">
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+  </div>
+</div>
+
+        <div class="post-detail">
+          <article class="post">
+            <h2 class="post-title">
+              PWN从入门到放弃(1)——PWN环境搭建
+            </h2>
+            <div class="post-info">
+              <span>
+                2024-11-06
+              </span>
+              <span>
+                2 min read
+              </span>
+              
+                <a href="https://ssyxsec.com/tag/BcBYBpcwgI/" class="post-tag">
+                  # Pwn
+                </a>
+              
+            </div>
+            
+            <div class="post-content-wrapper">
+              <div class="post-content" v-pre>
+                <h3 id="0x00-安装环境">0x00 安装环境</h3>
+<p>​</p>
+<p><strong>本文主要介绍利用ubuntu搭建pwn做题环境，包括pwntools,gdb,gdb-pwndbg,gdb-peda,libc库等</strong></p>
+<h3 id="0x01-安装pwntools">0x01 安装pwntools</h3>
+<pre><code class="language-javascript">$ sudo apt-get update
+$ sudo apt-get install python2.7 python-pip python-dev git libssl-dev libffi-dev build-essential
+$ sudo pip install --upgrade pip
+$ sudo pip install --upgrade pwntools
+</code></pre>
+<p><strong>需要注意的是，安装过程中如果报“error in cryptography setup command: Invalid environment marker: python_version &lt; ‘3’”这个错误，解决方法：</strong></p>
+<pre><code class="language-javascript">$ pip install --upgrade setuptools
+</code></pre>
+<p><strong>安装后可以通过在python中输入from pwn import * 来验证是否安装成功</strong></p>
+<h3 id="0x02-gcc等编译环境安装">0x02 gcc等编译环境安装</h3>
+<pre><code class="language-javascript">$ sudo apt-get install gcc gdb
+</code></pre>
+<h3 id="0x03-安装pwndbg">0x03 安装pwndbg</h3>
+<p><strong>这里要注意，要想peda和pwndbg共存，要先安装pwndbg再安装peda，若已安装peda，想再安装pwndbg，需调整gdbinit文件中source路径的顺序</strong></p>
+<pre><code class="language-javascript">$ git clone https://github.com/pwndbg/pwndbg
+$ cd pwndbg
+$ sudo ./setup.sh
+</code></pre>
+<h3 id="0x04-安装peda">0x04 安装peda</h3>
+<pre><code class="language-javascript">$ git clone https://github.com/longld/peda.git ~/peda
+$ echo &quot;source ~/peda/peda.py&quot; &gt;&gt; ~/.gdbinit
+</code></pre>
+<h3 id="0x05-安装libc库">0x05 安装libc库</h3>
+<pre><code class="language-javascript">$ git clone https://github.com/niklasb/libc-database.git
+$ ./get
+</code></pre>
+
+              </div>
+              <div class="toc-container">
+                <ul class="markdownIt-TOC">
+<li>
+<ul>
+<li>
+<ul>
+<li><a href="#0x00-%E5%AE%89%E8%A3%85%E7%8E%AF%E5%A2%83">0x00 安装环境</a></li>
+<li><a href="#0x01-%E5%AE%89%E8%A3%85pwntools">0x01 安装pwntools</a></li>
+<li><a href="#0x02-gcc%E7%AD%89%E7%BC%96%E8%AF%91%E7%8E%AF%E5%A2%83%E5%AE%89%E8%A3%85">0x02 gcc等编译环境安装</a></li>
+<li><a href="#0x03-%E5%AE%89%E8%A3%85pwndbg">0x03 安装pwndbg</a></li>
+<li><a href="#0x04-%E5%AE%89%E8%A3%85peda">0x04 安装peda</a></li>
+<li><a href="#0x05-%E5%AE%89%E8%A3%85libc%E5%BA%93">0x05 安装libc库</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+              </div>
+            </div>
+          </article>
+        </div>
+
+        
+
+        
+
+        <div class="site-footer">
+  Powered by <a href="https://github.com/getgridea/gridea" target="_blank">Gridea</a>
+  <a class="rss" href="https://ssyxsec.com/atom.xml" target="_blank">
+    <i class="ri-rss-line"></i> RSS
+  </a>
+</div>
+
+      </div>
+    </div>
+
+    <script>
+      hljs.initHighlightingOnLoad()
+
+      let mainNavLinks = document.querySelectorAll(".markdownIt-TOC a");
+
+      // This should probably be throttled.
+      // Especially because it triggers during smooth scrolling.
+      // https://lodash.com/docs/4.17.10#throttle
+      // You could do like...
+      // window.addEventListener("scroll", () => {
+      //    _.throttle(doThatStuff, 100);
+      // });
+      // Only not doing it here to keep this Pen dependency-free.
+
+      window.addEventListener("scroll", event => {
+        let fromTop = window.scrollY;
+
+        mainNavLinks.forEach((link, index) => {
+          let section = document.getElementById(decodeURI(link.hash).substring(1));
+          let nextSection = null
+          if (mainNavLinks[index + 1]) {
+            nextSection = document.getElementById(decodeURI(mainNavLinks[index + 1].hash).substring(1));
+          }
+          if (section.offsetTop <= fromTop) {
+            if (nextSection) {
+              if (nextSection.offsetTop > fromTop) {
+                link.classList.add("current");
+              } else {
+                link.classList.remove("current");    
+              }
+            } else {
+              link.classList.add("current");
+            }
+          } else {
+            link.classList.remove("current");
+          }
+        });
+      });
+
+    </script>
+  </body>
+</html>
